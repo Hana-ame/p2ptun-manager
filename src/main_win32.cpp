@@ -424,6 +424,9 @@ void ApplyPresetSelection() {
     SetCtrlTextU8(g_state->edtPort, is_connect ? preset.connect_port : preset.expose_port);
 }
 
+// 前向声明: PopulateQuickBarFromRow 在 Tab 切换时需要同步标签
+void UpdateTabDependentLabels();
+
 // 把选中行回填到编辑区 (按行的 mode 切换 Tab)
 void PopulateQuickBarFromRow(int row_idx) {
     if (!g_state || row_idx < 0 || row_idx >= static_cast<int>(g_state->cached_rows.size())) return;
@@ -1049,9 +1052,12 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
                 MessageBoxW(hwnd, ToW(err).c_str(), L"保存失败", MB_ICONERROR);
             } else {
                 // 全局高级默认值一并保存
-                p2ptun::AppConfig cfg = g_state->mgr->GetConfig();
-                ApplyAdvStringToGlobal(GetCtrlTextU8(g_state->edtAdvGlobal), cfg);
-                g_state->mgr->UpdateAdvancedDefaults(cfg);
+                p2ptun::AppConfig cfg2 = g_state->mgr->GetConfig();
+                ApplyAdvStringToGlobal(GetCtrlTextU8(g_state->edtAdvGlobal), cfg2);
+                std::string adv_err;
+                if (!g_state->mgr->UpdateAdvancedDefaults(cfg2, adv_err)) {
+                    MessageBoxW(hwnd, ToW(adv_err).c_str(), L"高级默认保存失败", MB_ICONERROR);
+                }
                 RefreshTunnelListView();
                 MessageBoxW(hwnd, L"全局设置已保存到 config.json！", L"保存成功", MB_ICONINFORMATION);
             }
