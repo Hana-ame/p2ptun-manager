@@ -1,59 +1,29 @@
 {
-  // p2ptun 管理器配置 (统一隧道模型: 每条配置同时可作为 Server/Client，运行时自选角色)
-  "p2ptun_path": "p2ptun.exe",
-  "default_secret": "my-secret-123456",
-  "default_proto": "hy2",
-  "default_bandwidth": 100,
-  "minimize_to_tray": true,
-
-  // 全局高级参数默认值 (所有隧道共享; 单条隧道可用 advanced 覆盖)
-  "advanced": {
-    "broker": "wss://0.peerjs.com",
-    "keepalive": "15s",
-    "max_peers": 16
-  },
-
-  // 统一隧道列表: id + ip:port, mode 为上次运行角色 (expose=Server / connect=Client)
+  // 简易模式配置：全局仅需设定 secret (所有隧道默认全等共用)，每个 item 仅需 id (默认随机生成) 和 port
+  "secret": "p2p-a1b2c3",
   "tunnels": [
     {
-      // Server 端: 暴露本机 3389 (RDP)
-      "id": "tunnel-rdp",
-      "remark": "远程桌面 (RDP)",
-      "name": "my-rdp",
-      "port": "127.0.0.1:3389",
-      "mode": "expose",
-      "last_role": "expose",
-      "enabled": false
+      "id": "tun-7f8a9b",
+      "port": "127.0.0.1:3389"
     },
     {
-      // 同一配置切到 Client 角色即可连接对端 (端口自动建议 13389 避开系统占用)
-      "id": "tunnel-rdp",
-      "remark": "远程桌面 (RDP)",
-      "name": "my-rdp",
-      "port": "127.0.0.1:13389",
-      "mode": "connect",
-      "last_role": "connect",
-      "enabled": false
+      "id": "tun-3c4d5e",
+      "port": "127.0.0.1:22"
     },
     {
-      "id": "tunnel-ssh",
-      "remark": "SSH / WSL2",
-      "name": "my-ssh",
-      "port": "127.0.0.1:22",
-      "mode": "expose",
-      "last_role": "expose",
-      "enabled": false
-    },
-    {
-      "id": "tunnel-proxy",
-      "remark": "代理 (SOCKS5/HTTP)",
-      "name": "my-proxy",
-      "port": "127.0.0.1:1080",
-      "mode": "connect",
-      "last_role": "connect",
-      "on_demand": true,
-      "idle_timeout": "30m",
-      "enabled": false
+      "id": "tun-9e0f1a",
+      "port": "127.0.0.1:1080"
     }
   ]
+
+  // ---- 以下为高级模式可选配置 (按需开启，不填则使用默认) ----
+  // "p2ptun_path": "p2ptun.exe",
+  // "default_proto": "hy2",
+  // "default_bandwidth": 100,
+  // "minimize_to_tray": true,
+  // "advanced": {
+  //   "broker": "wss://0.peerjs.com",
+  //   "keepalive": "15s",
+  //   "max_peers": 16
+  // }
 }

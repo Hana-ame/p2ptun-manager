@@ -7,20 +7,21 @@
 namespace p2ptun {
 
 // 单条隧道配置规则 (同时支持 Expose 暴露本机端口 与 Connect 连接远程隧道到本地端口)
-// 设计原则：极致傻瓜化。用户只需关心 name (隧道名) + port (本地端口)，其余自动补全或继承全局配置。
+// 简易模式：每条 item 只需关心 id (默认随机值) + port (本地端口)，secret 默认全等继承全局配置。
 struct TunnelRule {
-    std::string id;                 // 规则唯一标识 (为空时自动生成)
+    std::string id;                 // 隧道 ID (为空时自动生成随机值，两端填相同 ID 即可配对)
     std::string mode = "expose";    // 当前运行角色: "expose" (Server) 或 "connect" (Client)
     std::string last_role = "";     // 上次启动成功的角色 (持久化，重启后恢复；空=从未运行)
-    std::string remark;             // 备注说明，如 "家里远程桌面 RDP"
-    std::string name;               // 隧道名称 (Expose 与 Connect 填相同的名字即可配对)
+    std::string remark;             // 备注说明 (高级模式可选)
+    std::string name;               // 兼容旧字段 (与 id 保持一致)
     std::string port;               // 端口或地址，支持直接填 "3389"、":3389" 或 "127.0.0.1:3389"
+    std::string secret;             // 单条可选密钥覆盖 (留空 = 默认全等，使用全局 secret)
     std::string proto = "hy2";      // 传输协议: "hy2" (默认极速 Brutal CC), "quic", "classic"
     int bandwidth_mbps = 100;       // Hysteria 2 Brutal CC 带宽上限 (Mbps)
     bool on_demand = false;         // Connect 按需连接模式
     bool enabled = false;           // 是否在启动时自动运行
 
-    // ---- 高级穿透参数 (合并自 C# 全参数版；留空/0 = 不传该 flag，由 p2ptun 使用内置默认) ----
+    // ---- 高级穿透参数 (留空/0 = 不传该 flag，由 p2ptun 使用内置默认) ----
     std::string broker;             // -broker    PeerJS 信令服务器列表 (逗号分隔)
     std::string stun;               // -stun      STUN 列表 (逗号分隔)
     std::string turn;               // -turn      TURN 中继 (user:pass@host:3478?transport=udp)
@@ -29,39 +30,38 @@ struct TunnelRule {
     std::string keepalive;          // -keepalive 隧道心跳间隔 (如 "15s")
     std::string ice_ports;          // -ice-ports ICE UDP 端口范围 (如 "40000-40100")
     std::string nat1to1;            // -nat1to1   1:1 NAT 外部公网 IP
-    std::string idle_timeout;      // -idle-timeout Connect 按需模式空闲休眠时间 (如 "10m")
+    std::string idle_timeout;       // -idle-timeout Connect 按需模式空闲休眠时间 (如 "10m")
     bool keep_proxy = false;        // -keep-proxy 保留系统环境代理供信令使用
     bool force_relay = false;       // -force-relay 强制 TURN 中继模式
     int max_peers = 0;              // -max-peers Expose 最大并发客户端 (0 = p2ptun 默认 16)
-    bool auto_restart = true;      // 进程异常退出时守护重启
+    bool auto_restart = true;       // 进程异常退出时守护重启
 };
 
 // 全局配置文件结构 (对应 exe 同级目录的 config.json)
 struct AppConfig {
     std::string p2ptun_path = "p2ptun.exe"; // p2ptun 核心可执行文件路径
-    std::string default_secret = "p2p-123456";
+    std::string default_secret = "p2p-123456"; // 全局共享密钥 (默认所有隧道全等)
     std::string default_proto = "hy2";
     int default_bandwidth = 100;
     bool minimize_to_tray = true;           // 点击关闭按钮时最小化到系统托盘
     std::vector<TunnelRule> expose;         // 兼容旧格式: Server 角色规则
     std::vector<TunnelRule> connect;        // 兼容旧格式: Client 角色规则
-    std::vector<TunnelRule> tunnels;        // 新格式: 角色无关的统一隧道配置 (运行时自选 expose/connect)
+    std::vector<TunnelRule> tunnels;        // 新格式: 角色无关的统一隧道配置 (简易模式每项仅需 id + port)
 
     // ---- 全局高级参数默认值 (单规则同名字段留空时生效) ----
-    std::string adv_broker;                // -broker
-    std::string adv_stun;                  // -stun
+    std::string adv_broker;                 // -broker
+    std::string adv_stun;                   // -stun
     std::string adv_turn;                   // -turn
-    std::string adv_proxy;                 // -proxy
-    std::string adv_peer_key;              // -key
-    std::string adv_keepalive;             // -keepalive
-    std::string adv_ice_ports;             // -ice-ports
-    std::string adv_nat1to1;               // -nat1to1
-    std::string adv_idle_timeout;          // -idle-timeout
-    int adv_max_peers = 0;                 // -max-peers (0 = p2ptun 默认 16)
-    bool adv_force_relay = false;          // -force-relay
-    bool adv_keep_proxy = false;           // -keep-proxy
+    std::string adv_proxy;                  // -proxy
+    std::string adv_peer_key;               // -key
+    std::string adv_keepalive;              // -keepalive
+    std::string adv_ice_ports;              // -ice-ports
+    std::string adv_nat1to1;                // -nat1to1
+    std::string adv_idle_timeout;           // -idle-timeout
+    int adv_max_peers = 0;                  // -max-peers (0 = p2ptun 默认 16)
+    bool adv_force_relay = false;           // -force-relay
+    bool adv_keep_proxy = false;            // -keep-proxy
 };
-
 
 // 对应 p2ptun `GET /status` 返回的运行期状态快照
 struct StatusSnapshot {
@@ -99,6 +99,10 @@ struct ScenePreset {
 
 // 获取内置常用端口预设列表
 std::vector<ScenePreset> GetScenePresets();
+
+// 生成默认随机隧道 ID 与随机全局密钥
+std::string GenerateRandomTunnelId();
+std::string GenerateRandomSecret();
 
 // 字符串与端口规范化工具
 std::string Trim(const std::string& s);
@@ -139,6 +143,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
 // 构造启动子进程 p2ptun.exe 所需的命令行参数列表 (不含明文密钥，密钥通过 P2PTUN_SECRET 环境变量注入)
 std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppConfig& global_cfg, int status_port);
 std::string EffectiveSecret(const AppConfig& global_cfg);
+std::string EffectiveSecret(const TunnelRule& rule, const AppConfig& global_cfg);
 
 // 流量字节数可读格式化 (如 "12.5 MB", "850.0 KB/s")
 std::string FormatBytes(uint64_t bytes);

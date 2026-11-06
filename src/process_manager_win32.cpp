@@ -39,6 +39,12 @@ std::string CurrentTimeHMS() {
     return std::string(buf);
 }
 
+std::string RuleLogPrefix(const TunnelRule& r) {
+    if (!Trim(r.remark).empty()) return Trim(r.remark);
+    if (!Trim(r.id).empty()) return Trim(r.id);
+    return Trim(r.name);
+}
+
 #ifdef _WIN32
 std::wstring Utf8ToWideStr(const std::string& s) {
     if (s.empty()) return L"";
@@ -345,7 +351,7 @@ bool MultiTunnelManager::UpdateGlobalSettings(const std::string& p2ptun_path,
     cfg_.minimize_to_tray = minimize_to_tray;
     bool ok = SaveConfigLocked(out_err);
     if (ok) {
-        logs_.Append("设置", "已保存全局配置 (默认协议=" + cfg_.default_proto + ", 默认带宽=" + std::to_string(cfg_.default_bandwidth) + "Mbps)");
+        logs_.Append("设置", "已保存全局配置 (Secret 已同步, 默认协议=" + cfg_.default_proto + ", 默认带宽=" + std::to_string(cfg_.default_bandwidth) + "Mbps)");
     }
     return ok;
 }
@@ -397,6 +403,7 @@ bool MultiTunnelManager::ExportConfig(const std::string& target_path, std::strin
 
 bool MultiTunnelManager::AddOrUpdateRule(const TunnelRule& raw_rule, bool auto_start, std::string& out_id, std::string& out_err) {
     std::string target_id;
+    std::string old_id = Trim(raw_rule.id);
     {
         std::lock_guard<std::mutex> lock(mu_);
         TunnelRule nr = NormalizeRule(raw_rule, raw_rule.mode, cfg_.default_proto, cfg_.default_bandwidth);
@@ -406,7 +413,7 @@ bool MultiTunnelManager::AddOrUpdateRule(const TunnelRule& raw_rule, bool auto_s
 
         std::shared_ptr<ManagedInstance> found;
         for (auto& inst : instances_) {
-            if (inst->rule.id == nr.id) {
+            if (inst->rule.id == nr.id || (!old_id.empty() && inst->rule.id == old_id)) {
                 found = inst;
                 break;
             }
@@ -426,7 +433,7 @@ bool MultiTunnelManager::AddOrUpdateRule(const TunnelRule& raw_rule, bool auto_s
         if (!SaveConfigLocked(out_err)) {
             return false;
         }
-        logs_.Append(nr.remark, "已保存规则 (" + nr.mode + " " + nr.name + " <-> " + nr.port + ")");
+        logs_.Append(RuleLogPrefix(nr), "已保存规则 (" + nr.mode + " ID=" + nr.name + " <-> " + nr.port + ")");
     }
     if (auto_start) {
         return StartTunnel(target_id, out_err);
@@ -455,7 +462,7 @@ bool MultiTunnelManager::DeleteRule(const std::string& id, std::string& out_err)
         std::lock_guard<std::mutex> lock(mu_);
         SaveConfigLocked(out_err);
     }
-    logs_.Append(removed->rule.remark, "已删除隧道规则");
+    logs_.Append(RuleLogPrefix(removed->rule), "已删除隧道规则");
     return true;
 }
 
@@ -480,9 +487,9 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
     inst.rx_rate_bps = 0;
     inst.last_rate_time = std::chrono::steady_clock::now();
 
-    std::string secret = EffectiveSecret(cfg_);
+    std::string secret = EffectiveSecret(inst.rule, cfg_);
     if (secret.empty()) {
-        out_err = "配对密钥不能为空，请在全局设置或当前规则中填写密钥";
+        out_err = "配对密钥不能为空，请在全局设置中填写 Secret";
         inst.last_start_error = out_err;
         return false;
     }
@@ -545,7 +552,7 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
             << ")。请确认 p2ptun.exe 已放在本程序同级目录！";
         out_err = oss.str();
         inst.last_start_error = out_err;
-        logs_.Append(inst.rule.remark, "❌ " + out_err);
+        logs_.Append(RuleLogPrefix(inst.rule), "❌ " + out_err);
         return false;
     }
 
@@ -563,7 +570,7 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
     if (inst.log_thread.joinable()) {
         inst.log_thread.detach();
     }
-    std::string prefix = inst.rule.remark.empty() ? inst.rule.name : inst.rule.remark;
+    std::string prefix = RuleLogPrefix(inst.rule);
     inst.log_thread = std::thread([this, hReadPipe, prefix]() {
         char buf[1024];
         std::string pending;
@@ -587,12 +594,12 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
     inst.watchdog_restarts = 0;
 
     logs_.Append(prefix, "▶ 隧道已启动 (PID=" + std::to_string(inst.pid) + ", 方向=" + inst.rule.mode +
-                         ", 隧道名=" + inst.rule.name + ", 端口=" + inst.rule.port + ")");
+                         ", ID=" + inst.rule.name + ", 端口=" + inst.rule.port + ")");
     return true;
 #else
     inst.running = true;
     inst.pid = 9999;
-    logs_.Append(inst.rule.remark, "▶ 隧道已启动 (模拟模式)");
+    logs_.Append(RuleLogPrefix(inst.rule), "▶ 隧道已启动 (模拟模式)");
     return true;
 #endif
 }
@@ -600,7 +607,7 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
 void MultiTunnelManager::StopInstanceInternal(ManagedInstance& inst) {
     int status_port = 0;
     void* proc_handle = nullptr;
-    std::string remark;
+    std::string prefix;
     {
         std::lock_guard<std::mutex> ilock(inst.mu);
         if (!inst.running && !inst.process_handle) {
@@ -614,7 +621,7 @@ void MultiTunnelManager::StopInstanceInternal(ManagedInstance& inst) {
         inst.tx_rate_bps = 0;
         inst.rx_rate_bps = 0;
         inst.last_snap = StatusSnapshot{};
-        remark = inst.rule.remark;
+        prefix = RuleLogPrefix(inst.rule);
         inst.watchdog_restarts = 0;
     }
 
@@ -638,7 +645,7 @@ void MultiTunnelManager::StopInstanceInternal(ManagedInstance& inst) {
     if (inst.log_thread.joinable()) {
         inst.log_thread.detach();
     }
-    logs_.Append(remark, "⏹ 隧道已停止");
+    logs_.Append(prefix, "⏹ 隧道已停止");
 }
 
 bool MultiTunnelManager::StartTunnel(const std::string& id, std::string& out_err) {
@@ -704,7 +711,7 @@ bool MultiTunnelManager::ToggleTunnel(const std::string& id, std::string& out_er
 bool MultiTunnelManager::ReconnectTunnel(const std::string& id, std::string& out_err) {
     int status_port = 0;
     bool running = false;
-    std::string remark;
+    std::string prefix;
     {
         std::lock_guard<std::mutex> lock(mu_);
         for (auto& inst : instances_) {
@@ -712,7 +719,7 @@ bool MultiTunnelManager::ReconnectTunnel(const std::string& id, std::string& out
                 std::lock_guard<std::mutex> ilock(inst->mu);
                 running = inst->running;
                 status_port = inst->status_port;
-                remark = inst->rule.remark;
+                prefix = RuleLogPrefix(inst->rule);
                 break;
             }
         }
@@ -723,7 +730,7 @@ bool MultiTunnelManager::ReconnectTunnel(const std::string& id, std::string& out
 #ifdef _WIN32
     std::string body;
     if (HttpLocalRequest(status_port, L"POST", L"/reconnect", body)) {
-        logs_.Append(remark, "🔄 已触发快速重连");
+        logs_.Append(prefix, "🔄 已触发快速重连");
         return true;
     }
 #else
@@ -810,7 +817,7 @@ void MultiTunnelManager::PollAllStatuses() {
         DWORD exit_code = STILL_ACTIVE;
         bool want_restart = false;
         std::string rid;
-        std::string rremark;
+        std::string rprefix;
         if (proc_handle) {
             if (GetExitCodeProcess(static_cast<HANDLE>(proc_handle), &exit_code) && exit_code != STILL_ACTIVE) {
                 {
@@ -824,11 +831,11 @@ void MultiTunnelManager::PollAllStatuses() {
                     exited = true;
                     want_restart = inst->rule.auto_restart;
                     rid = inst->rule.id;
-                    rremark = inst->rule.remark;
+                    rprefix = RuleLogPrefix(inst->rule);
                 }
                 if (want_restart && inst->watchdog_restarts < 5) {
                     inst->watchdog_restarts++;
-                    logs_.Append(rremark, "🔄 看门狗: 进程异常退出 (退出码 " + std::to_string(exit_code) +
+                    logs_.Append(rprefix, "🔄 看门狗: 进程异常退出 (退出码 " + std::to_string(exit_code) +
                                               ")，2 秒后自动重启 (第 " + std::to_string(inst->watchdog_restarts) + " 次)");
                     {
                         std::lock_guard<std::mutex> ilock(inst->mu);
@@ -881,7 +888,7 @@ void MultiTunnelManager::PollAllStatuses() {
         ids.swap(restart_queue_);
         for (const auto& rid : ids) {
             std::string err;
-            StartTunnel(rid, err); // rule.auto_restart 已校验过；此调用会重新保存 enabled 状态
+            StartTunnel(rid, err);
         }
     }
 }
@@ -908,9 +915,9 @@ std::vector<TunnelRowView> MultiTunnelManager::GetRowViews() const {
         v.index = idx++;
         v.id = r.id;
         v.mode = r.mode;
-        v.mode_label = (r.mode == "connect") ? "📥 Connect (连接远程)" : "📤 Expose (暴露本机)";
+        v.mode_label = (r.mode == "connect") ? "📥 Client (连接)" : "📤 Server (暴露)";
         v.remark = r.remark;
-        v.name = r.name;
+        v.name = !Trim(r.name).empty() ? r.name : r.id;
         v.port = r.port;
         v.port_short = ExtractPortOnly(r.port);
         v.proto_bw_text = ToLower(r.proto) + " (" + std::to_string(r.bandwidth_mbps) + "M)";
@@ -925,7 +932,7 @@ std::vector<TunnelRowView> MultiTunnelManager::GetRowViews() const {
                 v.detail_text = inst->last_start_error;
             } else {
                 v.status_text = "⚪ 已停止";
-                v.detail_text = "双击此行或点击 [▶ 启动选中] 开启";
+                v.detail_text = "双击此行或点击左侧 ▶ 开启";
             }
             v.traffic_text = "↑ 0 B | ↓ 0 B";
         } else {
@@ -1011,7 +1018,7 @@ bool MultiTunnelManager::LaunchClientForTunnel(const std::string& id, std::strin
 
     std::string ep = NormalizeEndpoint(rule.port, "1080");
     std::string port = ExtractPortOnly(ep);
-    std::string hint = ToLower(rule.remark + " " + rule.name);
+    std::string hint = ToLower(rule.remark + " " + rule.name + " " + rule.id);
 
 #ifdef _WIN32
     if (port == "3389" || port == "13389" || hint.find("rdp") != std::string::npos || rule.remark.find("桌面") != std::string::npos) {
@@ -1034,6 +1041,5 @@ bool MultiTunnelManager::LaunchClientForTunnel(const std::string& id, std::strin
     return true;
 #endif
 }
-
 
 } // namespace p2ptun

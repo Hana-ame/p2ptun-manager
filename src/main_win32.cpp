@@ -54,18 +54,20 @@ enum ControlId : int {
     IDC_EDT_ADV_GLOBAL    = 1009,   // 全局高级参数默认值 (k=v 形式)
     IDC_BTN_ADV_HELP      = 1010,
     IDC_BTN_EXPORT_ALL    = 1011,   // 批量导出全部配置
+    IDC_BTN_RAND_SECRET   = 1012,   // 随机生成全局 Secret
 
-    // ② 规则编辑区 (在 Server/Client Tab 页内)
+    // ② 规则编辑区 (Server/Client 角色 + ID + Port)
     IDC_TAB_MODE          = 1020,
     IDC_CMB_PRESET        = 1021,
     IDC_EDT_REMARK        = 1022,
-    IDC_EDT_NAME          = 1023,
-    IDC_EDT_PORT          = 1024,
+    IDC_EDT_NAME          = 1023,   // 隧道 ID (默认随机值)
+    IDC_EDT_PORT          = 1024,   // 端口 Port
     IDC_CMB_PROTO         = 1026,
-    IDC_EDT_BW             = 1027,
+    IDC_EDT_BW            = 1027,
     IDC_BTN_ADD_START     = 1028,
     IDC_BTN_PASTE_PAIR    = 1029,
     IDC_EDT_ADV_RULE      = 1030,   // 单规则高级参数覆盖 (留空=用全局默认)
+    IDC_BTN_RAND_ID       = 1031,   // 随机生成隧道 ID
     IDC_BTN_MODE_TOGGLE   = 1035,   // 简易/高级模式切换
     IDC_CHK_ON_DEMAND     = 1036,   // Client 按需连接 (高级模式)
 
@@ -212,45 +214,50 @@ struct GuiState {
 
     // ① 全局设置区
     HWND grpGlobal = nullptr;
+    HWND lblExePath = nullptr;
     HWND edtExePath = nullptr;
     HWND btnBrowseExe = nullptr;
+    HWND lblDefSecret = nullptr;
     HWND edtDefSecret = nullptr;
+    HWND btnRandSecret = nullptr;
+    HWND lblDefProto = nullptr;
     HWND cmbDefProto = nullptr;
+    HWND lblDefBw = nullptr;
     HWND edtDefBw = nullptr;
     HWND chkMinTray = nullptr;
     HWND btnSaveGlobal = nullptr;
     HWND btnOpenCfg = nullptr;
+    HWND lblAdvGlobal = nullptr;
     HWND edtAdvGlobal = nullptr;
     HWND btnAdvHelp = nullptr;
     HWND btnExportAll = nullptr;
     HWND btnModeToggle = nullptr;
 
-    // ② 规则编辑区 (Tab 双页)
+    // ② 隧道 Item 编辑区 (GroupBox + 独立 Tab 条，绝不与输入控件重叠)
+    HWND grpRule = nullptr;
     HWND tabMode = nullptr;
+    HWND lblPreset = nullptr;
     HWND cmbPreset = nullptr;
+    HWND lblRemark = nullptr;
     HWND edtRemark = nullptr;
+    HWND btnPastePair = nullptr;
+    HWND lblName = nullptr;
     HWND edtName = nullptr;
+    HWND btnRandId = nullptr;
+    HWND lblPort = nullptr;
     HWND edtPort = nullptr;
+    HWND lblProtoBw = nullptr;
     HWND cmbProto = nullptr;
     HWND edtBw = nullptr;
     HWND btnAddStart = nullptr;
-    HWND btnPastePair = nullptr;
-    HWND edtAdvRule = nullptr;
-    HWND lblPort = nullptr;          // "暴露端口"/"本地监听" 标签随 Tab 切换
-
-    // Tab 页内的静态标签 (随 Tab 显示/隐藏 + DPI 移动)
-    HWND lblPreset = nullptr;
-    HWND lblRemark = nullptr;
-    HWND lblName = nullptr;
-    HWND lblProtoBw = nullptr;
     HWND lblAdvRule = nullptr;
-    HWND chkOnDemand = nullptr;      // Client 按需连接 (仅高级模式显示)
+    HWND edtAdvRule = nullptr;
+    HWND chkOnDemand = nullptr;
 
     // 列表 + 行内启停
     HWND listTunnels = nullptr;
-    std::vector<HWND> row_buttons;   // 与列表行一一对应的启/停按钮
+    std::vector<HWND> row_buttons;
     std::vector<std::string> row_button_ids;
-    bool suppress_row_btn_rebuild = false;
 
     // 操作按钮
     HWND btnStartOne = nullptr;
@@ -268,7 +275,7 @@ struct GuiState {
     HWND btnClearLog = nullptr;
     HWND edtLogs = nullptr;
 
-    bool advanced_mode = false;      // 默认简易模式: 只显示 id + ip:port
+    bool advanced_mode = false;      // 默认简易模式: 全局仅设 Secret，每个 Item 仅设 ID + Port
     bool syncing_tab = false;        // 程序性切换 Tab (回填选中行) 时不反转端口
 
     std::unique_ptr<p2ptun::MultiTunnelManager> mgr;
@@ -285,7 +292,9 @@ struct GuiState {
 GuiState* g_state = nullptr;
 
 void SetFontRecursive(HWND hwnd, HFONT font) {
-    SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    if (hwnd) {
+        SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    }
 }
 
 int GetSelectedRowIndex() {
@@ -316,6 +325,7 @@ std::string AdvFieldsToString(const p2ptun::TunnelRule* rule, const p2ptun::AppC
         if (!tv.empty()) adv += std::string(k) + "=" + tv + " ";
     };
     if (rule) {
+        append_kv("secret", rule->secret);
         append_kv("broker", rule->broker);
         append_kv("stun", rule->stun);
         append_kv("turn", rule->turn);
@@ -347,6 +357,20 @@ std::string AdvFieldsToString(const p2ptun::TunnelRule* rule, const p2ptun::AppC
 
 // 解析 "k=v k=v" 到规则覆盖字段
 void ApplyAdvStringToRule(const std::string& adv_raw, p2ptun::TunnelRule& r) {
+    r.secret.clear();
+    r.broker.clear();
+    r.stun.clear();
+    r.turn.clear();
+    r.proxy.clear();
+    r.peer_key.clear();
+    r.keepalive.clear();
+    r.ice_ports.clear();
+    r.nat1to1.clear();
+    r.idle_timeout.clear();
+    r.max_peers = 0;
+    r.force_relay = false;
+    r.keep_proxy = false;
+
     std::istringstream iss(p2ptun::Trim(adv_raw));
     std::string tok;
     while (iss >> tok) {
@@ -354,7 +378,8 @@ void ApplyAdvStringToRule(const std::string& adv_raw, p2ptun::TunnelRule& r) {
         if (eq == std::string::npos) continue;
         std::string key = p2ptun::ToLower(tok.substr(0, eq));
         std::string val = tok.substr(eq + 1);
-        if (key == "broker") r.broker = val;
+        if (key == "secret") r.secret = val;
+        else if (key == "broker") r.broker = val;
         else if (key == "stun") r.stun = val;
         else if (key == "turn") r.turn = val;
         else if (key == "proxy") r.proxy = val;
@@ -372,6 +397,19 @@ void ApplyAdvStringToRule(const std::string& adv_raw, p2ptun::TunnelRule& r) {
 
 // 解析 "k=v k=v" 到全局默认字段
 void ApplyAdvStringToGlobal(const std::string& adv_raw, p2ptun::AppConfig& cfg) {
+    cfg.adv_broker.clear();
+    cfg.adv_stun.clear();
+    cfg.adv_turn.clear();
+    cfg.adv_proxy.clear();
+    cfg.adv_peer_key.clear();
+    cfg.adv_keepalive.clear();
+    cfg.adv_ice_ports.clear();
+    cfg.adv_nat1to1.clear();
+    cfg.adv_idle_timeout.clear();
+    cfg.adv_max_peers = 0;
+    cfg.adv_force_relay = false;
+    cfg.adv_keep_proxy = false;
+
     std::istringstream iss(p2ptun::Trim(adv_raw));
     std::string tok;
     while (iss >> tok) {
@@ -420,11 +458,12 @@ void ApplyPresetSelection() {
 
     g_state->editing_rule_id.clear();
     SetCtrlTextU8(g_state->edtRemark, is_connect ? preset.remark_connect : preset.remark_expose);
-    SetCtrlTextU8(g_state->edtName, preset.default_name);
+    if (GetCtrlTextU8(g_state->edtName).empty()) {
+        SetCtrlTextU8(g_state->edtName, p2ptun::GenerateRandomTunnelId());
+    }
     SetCtrlTextU8(g_state->edtPort, is_connect ? preset.connect_port : preset.expose_port);
 }
 
-// 前向声明: PopulateQuickBarFromRow 在 Tab 切换时需要同步标签
 void UpdateTabDependentLabels();
 
 // 把选中行回填到编辑区 (按行的 mode 切换 Tab)
@@ -433,11 +472,10 @@ void PopulateQuickBarFromRow(int row_idx) {
     const auto& row = g_state->cached_rows[static_cast<size_t>(row_idx)];
     g_state->editing_rule_id = row.id;
 
-    // 行模式驱动 Tab 切换 (角色即"这条配置这次以哪个角色运行")
     int tab_idx = (row.mode == "connect") ? 1 : 0;
     g_state->syncing_tab = true;
     SendMessageW(g_state->tabMode, TCM_SETCURSEL, tab_idx, 0);
-    UpdateTabDependentLabels();   // 仅更新标签，不反转端口
+    UpdateTabDependentLabels();
     g_state->syncing_tab = false;
 
     SendMessageW(g_state->cmbPreset, CB_SETCURSEL, 0, 0);
@@ -462,7 +500,6 @@ void SyncRowButtons() {
     auto& rows = g_state->cached_rows;
     auto& btns = g_state->row_buttons;
 
-    // 数量不匹配时重建
     if (btns.size() != rows.size()) {
         for (HWND b : btns) {
             if (b) DestroyWindow(b);
@@ -481,7 +518,6 @@ void SyncRowButtons() {
             g_state->row_button_ids.push_back(rows[i].id);
         }
     } else {
-        // 数量一致时仅更新 id 映射与文本
         for (size_t i = 0; i < rows.size(); ++i) {
             g_state->row_button_ids[i] = rows[i].id;
             SetWindowTextW(btns[i], rows[i].running ? L"⏹" : L"▶");
@@ -508,13 +544,15 @@ void RefreshTunnelListView() {
 
     for (size_t i = 0; i < rows.size(); ++i) {
         const auto& r = rows[i];
+        // 与 10 列严格对齐: 0=启停按钮占位, 1=#, 2=运行状态, 3=模式, 4=ID, 5=Port, 6=备注, 7=协议/带宽, 8=速率/流量, 9=详情
         std::vector<std::wstring> cols = {
+            L"",
             ToW(std::to_string(r.index)),
             ToW(r.status_text),
             ToW(r.mode_label),
-            ToW(r.remark),
             ToW(r.name),
             ToW(r.port),
+            ToW(r.remark),
             ToW(r.proto_bw_text),
             ToW(r.traffic_text),
             ToW(r.detail_text)
@@ -561,12 +599,10 @@ void RefreshTunnelListView() {
 
     SyncRowButtons();
 
-    // 行内按钮定位到每行第一列 (#序号) 下方区域 —— 放在状态列左侧
     for (size_t i = 0; i < g_state->row_buttons.size() && i < rows.size(); ++i) {
         RECT rc{};
         ListView_GetItemRect(hList, static_cast<int>(i), &rc, LVIR_BOUNDS);
         MapWindowPoints(hList, g_state->hwnd, reinterpret_cast<POINT*>(&rc), 2);
-        // 按钮放在 # 列宽内、行高垂直居中
         int btn_w = Scale(44);
         int btn_h = Scale(24);
         int bx = rc.left + Scale(2);
@@ -641,16 +677,15 @@ void ShowTrayContextMenu(HWND hwnd) {
     DestroyMenu(hMenu);
 }
 
-// Tab 标签随当前页切换："暴露端口" / "本地监听"，并同步端口预设方向
+// Tab 标签随当前页切换："Port(暴露):" / "Port(本地):"，并同步端口预设方向
 void UpdateTabDependentLabels() {
     if (!g_state) return;
     static std::string last_mode = "expose";
     std::string cur_mode = CurrentTabMode();
     bool is_connect = (cur_mode == "connect");
-    SetWindowTextW(g_state->lblPort, is_connect ? L"本地监听:" : L"暴露端口:");
+    SetWindowTextW(g_state->lblPort, is_connect ? L"Port(本地):" : L"Port(暴露):");
 
     if (!g_state->syncing_tab && cur_mode != last_mode) {
-        // 用户切换角色: 同一配置两端共用，端口建议自动反转 (3389 <-> 13389, 22 <-> 2222 ...)
         std::string cur_port = GetCtrlTextU8(g_state->edtPort);
         std::string p = p2ptun::ExtractPortOnly(cur_port);
         std::string flipped = is_connect
@@ -659,38 +694,174 @@ void UpdateTabDependentLabels() {
         if (!flipped.empty()) {
             SetCtrlTextU8(g_state->edtPort, flipped);
         }
-        SendMessageW(g_state->cmbPreset, CB_SETCURSEL, 0, 0); // 预设清位避免错位
+        SendMessageW(g_state->cmbPreset, CB_SETCURSEL, 0, 0);
     }
     last_mode = cur_mode;
 }
 
 // ---------------------------------------------------------------------------
-// 布局：所有数值均为 96-DPI 逻辑像素，经 Scale() 缩放
+// 统一布局：简易模式 vs 高级模式
+//   简易模式：
+//     ① 全局设置仅显示 Secret (默认全等) + 随机 + 保存 + 切换高级模式
+//     ② 每个 Item 仅显示 Server/Client 角色 + ID (默认随机值) + Port + 保存启动
+//     列表自动收起「备注说明」「协议/带宽」高级列
+//   高级模式：
+//     展开全部全局设置、预设、备注、协议/带宽、单条参数覆盖与全部表格列
 // ---------------------------------------------------------------------------
 void LayoutControls(int width, int height) {
     if (!g_state || width <= 0 || height <= 0) return;
 
     int pad = Scale(10);
     int content_w = width - pad * 2;
-    if (content_w < Scale(760)) content_w = Scale(760);
+    if (content_w < Scale(780)) content_w = Scale(780);
+
+    BOOL adv = g_state->advanced_mode ? TRUE : FALSE;
+    auto showAdv = [&](HWND h) {
+        if (h) ShowWindow(h, adv ? SW_SHOW : SW_HIDE);
+    };
+
+    // ① 全局设置区显隐与排版
+    showAdv(g_state->lblExePath);
+    showAdv(g_state->edtExePath);
+    showAdv(g_state->btnBrowseExe);
+    showAdv(g_state->lblDefProto);
+    showAdv(g_state->cmbDefProto);
+    showAdv(g_state->lblDefBw);
+    showAdv(g_state->edtDefBw);
+    showAdv(g_state->chkMinTray);
+    showAdv(g_state->btnOpenCfg);
+    showAdv(g_state->lblAdvGlobal);
+    showAdv(g_state->edtAdvGlobal);
+    showAdv(g_state->btnAdvHelp);
+    showAdv(g_state->btnExportAll);
 
     int y = Scale(6);
-
-    // ① 全局区
-    int g1_h = Scale(86);   // 两行: 主设置行 + 高级默认行
+    int g1_h = adv ? Scale(92) : Scale(56);
     MoveWindow(g_state->grpGlobal, pad, y, content_w, g1_h, TRUE);
+    SetWindowTextW(g_state->grpGlobal,
+                   adv ? L"① 全局设置 (高级模式：核心路径 / 全局 Secret / 默认协议带宽 / 全局高级参数)"
+                       : L"① 全局设置 (简易模式：仅需设定全局 Secret，所有隧道默认全等共用)");
+
+    int x0 = pad + Scale(12);
+    if (!adv) {
+        // 简易模式 ① 区：仅一行 Secret + 随机 + 保存 + 切换高级模式
+        int r1y = y + Scale(22);
+        SetWindowTextW(g_state->lblDefSecret, L"Secret (默认全等):");
+        SetWindowTextW(g_state->btnSaveGlobal, L"💾 保存 Secret");
+        MoveWindow(g_state->lblDefSecret, x0, r1y + Scale(4), Scale(118), Scale(22), TRUE);
+        MoveWindow(g_state->edtDefSecret, x0 + Scale(122), r1y, Scale(200), Scale(24), TRUE);
+        MoveWindow(g_state->btnRandSecret, x0 + Scale(328), r1y - Scale(1), Scale(72), Scale(26), TRUE);
+        MoveWindow(g_state->btnSaveGlobal, x0 + Scale(408), r1y - Scale(1), Scale(116), Scale(26), TRUE);
+        MoveWindow(g_state->btnModeToggle, pad + content_w - Scale(124), r1y - Scale(1), Scale(112), Scale(26), TRUE);
+    } else {
+        // 高级模式 ① 区：两行完整全局配置
+        int r1y = y + Scale(24);
+        int r2y = y + Scale(56);
+        SetWindowTextW(g_state->lblDefSecret, L"Secret:");
+        SetWindowTextW(g_state->btnSaveGlobal, L"💾 保存设置");
+
+        MoveWindow(g_state->lblExePath, x0, r1y + Scale(4), Scale(60), Scale(22), TRUE);
+        MoveWindow(g_state->edtExePath, x0 + Scale(62), r1y, Scale(105), Scale(24), TRUE);
+        MoveWindow(g_state->btnBrowseExe, x0 + Scale(170), r1y - Scale(1), Scale(54), Scale(26), TRUE);
+
+        MoveWindow(g_state->lblDefSecret, x0 + Scale(232), r1y + Scale(4), Scale(48), Scale(22), TRUE);
+        MoveWindow(g_state->edtDefSecret, x0 + Scale(282), r1y, Scale(120), Scale(24), TRUE);
+        MoveWindow(g_state->btnRandSecret, x0 + Scale(405), r1y - Scale(1), Scale(58), Scale(26), TRUE);
+
+        MoveWindow(g_state->lblDefProto, x0 + Scale(471), r1y + Scale(4), Scale(38), Scale(22), TRUE);
+        MoveWindow(g_state->cmbDefProto, x0 + Scale(511), r1y - Scale(1), Scale(92), Scale(120), TRUE);
+
+        MoveWindow(g_state->lblDefBw, x0 + Scale(611), r1y + Scale(4), Scale(52), Scale(22), TRUE);
+        MoveWindow(g_state->edtDefBw, x0 + Scale(665), r1y, Scale(44), Scale(24), TRUE);
+
+        MoveWindow(g_state->chkMinTray, x0 + Scale(717), r1y + Scale(2), Scale(110), Scale(22), TRUE);
+        MoveWindow(g_state->btnSaveGlobal, x0 + Scale(831), r1y - Scale(1), Scale(82), Scale(26), TRUE);
+        MoveWindow(g_state->btnOpenCfg, x0 + Scale(917), r1y - Scale(1), Scale(78), Scale(26), TRUE);
+
+        MoveWindow(g_state->lblAdvGlobal, x0, r2y + Scale(4), Scale(60), Scale(22), TRUE);
+        int adv_edt_w = content_w - Scale(390);
+        if (adv_edt_w < Scale(320)) adv_edt_w = Scale(320);
+        MoveWindow(g_state->edtAdvGlobal, x0 + Scale(62), r2y, adv_edt_w, Scale(24), TRUE);
+        int ax = x0 + Scale(68) + adv_edt_w;
+        MoveWindow(g_state->btnAdvHelp, ax, r2y - Scale(1), Scale(32), Scale(26), TRUE);
+        MoveWindow(g_state->btnExportAll, ax + Scale(38), r2y - Scale(1), Scale(148), Scale(26), TRUE);
+        MoveWindow(g_state->btnModeToggle, pad + content_w - Scale(124), r2y - Scale(1), Scale(112), Scale(26), TRUE);
+    }
+
     y += g1_h + Scale(6);
 
-    // ② Tab 编辑区 (简易模式一行矮些; 高级模式三行)
-    int tab_h = g_state->advanced_mode ? Scale(120) : Scale(64);
-    MoveWindow(g_state->tabMode, pad, y, content_w, tab_h, TRUE);
-    y += tab_h + Scale(6);
+    // ② 隧道规则编辑区显隐与排版
+    showAdv(g_state->lblPreset);
+    showAdv(g_state->cmbPreset);
+    showAdv(g_state->lblRemark);
+    showAdv(g_state->edtRemark);
+    showAdv(g_state->btnPastePair);
+    showAdv(g_state->lblProtoBw);
+    showAdv(g_state->cmbProto);
+    showAdv(g_state->edtBw);
+    showAdv(g_state->lblAdvRule);
+    showAdv(g_state->edtAdvRule);
+    showAdv(g_state->chkOnDemand);
 
-    // 列表
+    int g2_h = adv ? Scale(126) : Scale(62);
+    MoveWindow(g_state->grpRule, pad, y, content_w, g2_h, TRUE);
+    SetWindowTextW(g_state->grpRule,
+                   adv ? L"② 隧道设置 (高级模式：支持预设、备注、协议带宽、按需连接与单条参数覆盖)"
+                       : L"② 隧道设置 (简易模式：每个 Item 仅需设定 ID 与 Port，ID 默认给出随机值)");
+
+    if (!adv) {
+        // 简易模式 ② 区：单行 (左侧 Server/Client 角色切换 Tab 条 + ID + 随机 + Port + 保存并启动)
+        int ry = y + Scale(24);
+        MoveWindow(g_state->tabMode, x0, ry - Scale(2), Scale(256), Scale(28), TRUE);
+        MoveWindow(g_state->lblName, x0 + Scale(272), ry + Scale(4), Scale(26), Scale(22), TRUE);
+        MoveWindow(g_state->edtName, x0 + Scale(300), ry, Scale(150), Scale(24), TRUE);
+        MoveWindow(g_state->btnRandId, x0 + Scale(454), ry - Scale(1), Scale(68), Scale(26), TRUE);
+        MoveWindow(g_state->lblPort, x0 + Scale(536), ry + Scale(4), Scale(72), Scale(22), TRUE);
+        MoveWindow(g_state->edtPort, x0 + Scale(610), ry, Scale(120), Scale(24), TRUE);
+        MoveWindow(g_state->btnAddStart, x0 + Scale(744), ry - Scale(1), Scale(190), Scale(26), TRUE);
+    } else {
+        // 高级模式 ② 区：三行无重叠布局
+        int row1_y = y + Scale(24);
+        int row2_y = row1_y + Scale(33);
+        int row3_y = row2_y + Scale(33);
+
+        MoveWindow(g_state->tabMode, x0, row1_y - Scale(2), Scale(256), Scale(28), TRUE);
+        MoveWindow(g_state->lblPreset, x0 + Scale(270), row1_y + Scale(4), Scale(60), Scale(22), TRUE);
+        MoveWindow(g_state->cmbPreset, x0 + Scale(332), row1_y, Scale(178), Scale(220), TRUE);
+        MoveWindow(g_state->lblRemark, x0 + Scale(522), row1_y + Scale(4), Scale(60), Scale(22), TRUE);
+        MoveWindow(g_state->edtRemark, x0 + Scale(584), row1_y, Scale(140), Scale(24), TRUE);
+        MoveWindow(g_state->btnPastePair, x0 + Scale(736), row1_y - Scale(1), Scale(220), Scale(26), TRUE);
+
+        MoveWindow(g_state->lblName, x0, row2_y + Scale(4), Scale(26), Scale(22), TRUE);
+        MoveWindow(g_state->edtName, x0 + Scale(28), row2_y, Scale(140), Scale(24), TRUE);
+        MoveWindow(g_state->btnRandId, x0 + Scale(172), row2_y - Scale(1), Scale(64), Scale(26), TRUE);
+        MoveWindow(g_state->lblPort, x0 + Scale(248), row2_y + Scale(4), Scale(72), Scale(22), TRUE);
+        MoveWindow(g_state->edtPort, x0 + Scale(322), row2_y, Scale(110), Scale(24), TRUE);
+        MoveWindow(g_state->lblProtoBw, x0 + Scale(444), row2_y + Scale(4), Scale(62), Scale(22), TRUE);
+        MoveWindow(g_state->cmbProto, x0 + Scale(508), row2_y, Scale(78), Scale(120), TRUE);
+        MoveWindow(g_state->edtBw, x0 + Scale(590), row2_y, Scale(44), Scale(24), TRUE);
+        MoveWindow(g_state->chkOnDemand, x0 + Scale(644), row2_y + Scale(2), Scale(116), Scale(22), TRUE);
+        MoveWindow(g_state->btnAddStart, x0 + Scale(766), row2_y - Scale(1), Scale(190), Scale(26), TRUE);
+
+        MoveWindow(g_state->lblAdvRule, x0, row3_y + Scale(4), Scale(88), Scale(22), TRUE);
+        MoveWindow(g_state->edtAdvRule, x0 + Scale(92), row3_y, content_w - Scale(116), Scale(24), TRUE);
+    }
+
+    y += g2_h + Scale(6);
+
+    // 列表列宽随简易/高级模式动态切换：简易模式隐藏「备注说明」(col 6) 与「协议/带宽」(col 7)
+    if (g_state->listTunnels) {
+        ListView_SetColumnWidth(g_state->listTunnels, 4, adv ? Scale(135) : Scale(180)); // ID 列
+        ListView_SetColumnWidth(g_state->listTunnels, 5, adv ? Scale(120) : Scale(150)); // Port 列
+        ListView_SetColumnWidth(g_state->listTunnels, 6, adv ? Scale(130) : 0);          // 备注说明 (仅高级模式)
+        ListView_SetColumnWidth(g_state->listTunnels, 7, adv ? Scale(88) : 0);           // 协议/带宽 (仅高级模式)
+    }
+
+    // 列表与底部区域
     int action_h = Scale(34);
-    int log_h = Scale(155);
+    int log_h = Scale(150);
     int list_top = y;
-    int list_h = height - y - action_h - log_h - Scale(28);
+    int list_h = height - y - action_h - log_h - Scale(24);
     if (list_h < Scale(140)) list_h = Scale(140);
     MoveWindow(g_state->listTunnels, pad, list_top, content_w, list_h, TRUE);
 
@@ -717,7 +888,6 @@ void LayoutControls(int width, int height) {
     MoveWindow(g_state->btnClearLog, pad + content_w - Scale(92), log_top + Scale(14), Scale(80), Scale(22), TRUE);
     MoveWindow(g_state->edtLogs, pad + Scale(8), log_top + Scale(40), content_w - Scale(16), actual_log_h - Scale(48), TRUE);
 
-    // 行内按钮随列表刷新 (列表行矩形依赖列表客户区)
     SyncRowButtons();
     for (size_t i = 0; i < g_state->row_buttons.size(); ++i) {
         RECT rc{};
@@ -730,67 +900,6 @@ void LayoutControls(int width, int height) {
     }
 }
 
-// Tab 显示区内的控件位置（相对主窗口客户区，位于 tab 控件内部）
-// 简易模式: 一行 (隧道名称 + 端口 + 保存启动)
-// 高级模式: 三行 (预设/备注/粘贴配对码；名称/端口/协议/带宽/保存；高级参数覆盖 + 按需连接)
-void LayoutTabChildren() {
-    if (!g_state || !g_state->tabMode) return;
-
-    RECT tab_rc{};
-    GetClientRect(g_state->tabMode, &tab_rc);
-    SendMessageW(g_state->tabMode, TCM_ADJUSTRECT, FALSE, reinterpret_cast<LPARAM>(&tab_rc));
-    MapWindowPoints(g_state->tabMode, g_state->hwnd, reinterpret_cast<POINT*>(&tab_rc), 2);
-
-    int x0 = tab_rc.left + Scale(12);
-
-    // 高级专属控件显隐
-    BOOL adv = g_state->advanced_mode ? TRUE : FALSE;
-    auto show_adv = [&](HWND h) { ShowWindow(h, adv ? SW_SHOW : SW_HIDE); };
-    show_adv(g_state->lblPreset);   show_adv(g_state->cmbPreset);
-    show_adv(g_state->lblRemark);   show_adv(g_state->edtRemark);
-    show_adv(g_state->btnPastePair);
-    show_adv(g_state->lblProtoBw); show_adv(g_state->cmbProto);
-    show_adv(g_state->edtBw);
-    show_adv(g_state->lblAdvRule);  show_adv(g_state->edtAdvRule);
-    show_adv(g_state->chkOnDemand);
-
-    if (!g_state->advanced_mode) {
-        // ===== 简易模式: 唯一一行 =====
-        int row_y = tab_rc.top + Scale(14);
-        MoveWindow(g_state->lblName, x0, row_y + Scale(4), Scale(62), Scale(22), TRUE);
-        MoveWindow(g_state->edtName, x0 + Scale(66), row_y, Scale(160), Scale(24), TRUE);
-        MoveWindow(g_state->lblPort, x0 + Scale(250), row_y + Scale(4), Scale(62), Scale(22), TRUE);
-        MoveWindow(g_state->edtPort, x0 + Scale(316), row_y, Scale(130), Scale(24), TRUE);
-        MoveWindow(g_state->btnAddStart, x0 + Scale(470), row_y - Scale(2), Scale(220), Scale(28), TRUE);
-    } else {
-        // ===== 高级模式: 三行 =====
-        int row1_y = tab_rc.top + Scale(8);
-        int row2_y = row1_y + Scale(32);
-        int row3_y = row2_y + Scale(32);
-
-        MoveWindow(g_state->lblPreset, x0, row1_y + Scale(4), Scale(62), Scale(22), TRUE);
-        MoveWindow(g_state->cmbPreset, x0 + Scale(66), row1_y, Scale(185), Scale(220), TRUE);
-        MoveWindow(g_state->lblRemark, x0 + Scale(270), row1_y + Scale(4), Scale(62), Scale(22), TRUE);
-        MoveWindow(g_state->edtRemark, x0 + Scale(334), row1_y, Scale(140), Scale(24), TRUE);
-        MoveWindow(g_state->btnPastePair, x0 + Scale(500), row1_y - Scale(2), Scale(298), Scale(28), TRUE);
-
-        // 行2: 名称 -> 端口
-        MoveWindow(g_state->lblName, x0, row2_y + Scale(4), Scale(62), Scale(22), TRUE);
-        MoveWindow(g_state->edtName, x0 + Scale(66), row2_y, Scale(140), Scale(24), TRUE);
-        MoveWindow(g_state->lblPort, x0 + Scale(230), row2_y + Scale(4), Scale(62), Scale(22), TRUE);
-        MoveWindow(g_state->edtPort, x0 + Scale(296), row2_y, Scale(110), Scale(24), TRUE);
-        MoveWindow(g_state->lblProtoBw, x0 + Scale(430), row2_y + Scale(4), Scale(62), Scale(22), TRUE);
-        MoveWindow(g_state->cmbProto, x0 + Scale(494), row2_y, Scale(80), Scale(120), TRUE);
-        MoveWindow(g_state->edtBw, x0 + Scale(590), row2_y, Scale(42), Scale(24), TRUE);
-        MoveWindow(g_state->btnAddStart, x0 + Scale(660), row2_y - Scale(2), Scale(250), Scale(28), TRUE);
-
-        // 行3: 高级参数覆盖 + Client 按需
-        MoveWindow(g_state->lblAdvRule, x0, row3_y + Scale(4), Scale(92), Scale(22), TRUE);
-        MoveWindow(g_state->edtAdvRule, x0 + Scale(96), row3_y, Scale(430), Scale(24), TRUE);
-        MoveWindow(g_state->chkOnDemand, x0 + Scale(560), row3_y + Scale(3), Scale(280), Scale(22), TRUE);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 控件创建
 // ---------------------------------------------------------------------------
@@ -799,8 +908,7 @@ void CreateAllControls(HWND hwnd) {
 
     UpdateDpiFromWindow(hwnd);
 
-    // 字体随 DPI 缩放：96DPI 基准 -14 → 200% 时 -28
-    int font_h = -MulDiv(9, g_dpi, 72);   // 9pt 基准
+    int font_h = -MulDiv(9, g_dpi, 72);
     g_state->hFont = CreateFontW(font_h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
@@ -833,26 +941,25 @@ void CreateAllControls(HWND hwnd) {
         return hCtrl;
     };
 
-    // ============ ① 全局设置区 (两行) ============
+    // ============ ① 全局设置区 ============
     g_state->grpGlobal = CreateWindowExW(0, L"BUTTON",
-                                         L"① 全局设置 (密钥/协议/带宽全局共享，密钥只在这里配)",
+                                         L"① 全局设置 (简易模式：仅需设定全局 Secret，所有隧道默认全等共用)",
                                          WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-                                         Scale(10), Scale(6), Scale(980), Scale(86), hwnd, nullptr, hInst, nullptr);
+                                         0, 0, Scale(980), Scale(56), hwnd, nullptr, hInst, nullptr);
     SetFontRecursive(g_state->grpGlobal, g_state->hFontBold);
 
-    // 行1: 核心路径 / 密钥 / 协议 / 带宽 / 托盘 / 保存 / 导出
-    int r1y = Scale(30);
-    makeLabel(L"核心路径:", Scale(20), r1y + Scale(4), Scale(62), Scale(22));
-    g_state->edtExePath = makeEdit(IDC_EDT_P2PTUN_PATH, L"p2ptun.exe", Scale(84), r1y, Scale(115), Scale(24));
-    g_state->btnBrowseExe = makeBtn(IDC_BTN_BROWSE_EXE, L"浏览...", Scale(202), r1y - Scale(1), Scale(56), Scale(26));
+    g_state->lblExePath = makeLabel(L"核心路径:", 0, 0, Scale(60), Scale(22));
+    g_state->edtExePath = makeEdit(IDC_EDT_P2PTUN_PATH, L"p2ptun.exe", 0, 0, Scale(110), Scale(24));
+    g_state->btnBrowseExe = makeBtn(IDC_BTN_BROWSE_EXE, L"浏览...", 0, 0, Scale(54), Scale(26));
 
-    makeLabel(L"默认密钥:", Scale(268), r1y + Scale(4), Scale(62), Scale(22));
-    g_state->edtDefSecret = makeEdit(IDC_EDT_DEF_SECRET, L"", Scale(332), r1y, Scale(115), Scale(24));
+    g_state->lblDefSecret = makeLabel(L"Secret (默认全等):", 0, 0, Scale(118), Scale(22));
+    g_state->edtDefSecret = makeEdit(IDC_EDT_DEF_SECRET, L"", 0, 0, Scale(180), Scale(24));
+    g_state->btnRandSecret = makeBtn(IDC_BTN_RAND_SECRET, L"🎲 随机", 0, 0, Scale(68), Scale(26));
 
-    makeLabel(L"默认协议:", Scale(456), r1y + Scale(4), Scale(62), Scale(22));
+    g_state->lblDefProto = makeLabel(L"协议:", 0, 0, Scale(40), Scale(22));
     g_state->cmbDefProto = CreateWindowExW(0, L"COMBOBOX", L"",
                                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                           Scale(520), r1y - Scale(1), Scale(100), Scale(120), hwnd,
+                                           0, 0, Scale(92), Scale(120), hwnd,
                                            reinterpret_cast<HMENU>(IDC_CMB_DEF_PROTO), hInst, nullptr);
     SetFontRecursive(g_state->cmbDefProto, g_state->hFont);
     SendMessageW(g_state->cmbDefProto, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"hy2 (极速)"));
@@ -860,48 +967,51 @@ void CreateAllControls(HWND hwnd) {
     SendMessageW(g_state->cmbDefProto, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"classic"));
     SendMessageW(g_state->cmbDefProto, CB_SETCURSEL, 0, 0);
 
-    makeLabel(L"带宽(M):", Scale(628), r1y + Scale(4), Scale(54), Scale(22));
-    g_state->edtDefBw = makeEdit(IDC_EDT_DEF_BW, L"100", Scale(682), r1y, Scale(46), Scale(24), ES_NUMBER);
+    g_state->lblDefBw = makeLabel(L"带宽(M):", 0, 0, Scale(52), Scale(22));
+    g_state->edtDefBw = makeEdit(IDC_EDT_DEF_BW, L"100", 0, 0, Scale(44), Scale(24), ES_NUMBER);
 
-    g_state->chkMinTray = CreateWindowExW(0, L"BUTTON", L"关闭最小化到托盘",
+    g_state->chkMinTray = CreateWindowExW(0, L"BUTTON", L"最小化到托盘",
                                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                          Scale(736), r1y + Scale(2), Scale(128), Scale(22), hwnd,
+                                          0, 0, Scale(110), Scale(22), hwnd,
                                           reinterpret_cast<HMENU>(IDC_CHK_MIN_TRAY), hInst, nullptr);
     SetFontRecursive(g_state->chkMinTray, g_state->hFont);
 
-    g_state->btnSaveGlobal = makeBtn(IDC_BTN_SAVE_GLOBAL, L"💾 保存设置", Scale(868), r1y - Scale(1), Scale(86), Scale(27));
-    g_state->btnOpenCfg = makeBtn(IDC_BTN_OPEN_CONFIG, L"📂 配置文件", Scale(958), r1y - Scale(1), Scale(86), Scale(27));
+    g_state->btnSaveGlobal = makeBtn(IDC_BTN_SAVE_GLOBAL, L"💾 保存 Secret", 0, 0, Scale(110), Scale(26));
+    g_state->btnOpenCfg = makeBtn(IDC_BTN_OPEN_CONFIG, L"📂 配置文件", 0, 0, Scale(78), Scale(26));
 
-    // 行2: 全局高级参数默认值 + 帮助 + 批量导出
-    int r2y = Scale(62);
-    makeLabel(L"高级默认:", Scale(20), r2y + Scale(4), Scale(62), Scale(22));
-    g_state->edtAdvGlobal = makeEdit(IDC_EDT_ADV_GLOBAL, L"", Scale(84), r2y, Scale(560), Scale(24));
+    g_state->lblAdvGlobal = makeLabel(L"高级默认:", 0, 0, Scale(60), Scale(22));
+    g_state->edtAdvGlobal = makeEdit(IDC_EDT_ADV_GLOBAL, L"", 0, 0, Scale(500), Scale(24));
     SendMessageW(g_state->edtAdvGlobal, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(
         L"全局生效: broker=wss://0.peerjs.com keepalive=15s max_peers=32 ... (留空=p2ptun 内置默认)"));
-    g_state->btnAdvHelp = makeBtn(IDC_BTN_ADV_HELP, L"❓", Scale(648), r2y - Scale(1), Scale(34), Scale(26));
-    g_state->btnExportAll = makeBtn(IDC_BTN_EXPORT_ALL, L"📤 批量导出全部配置", Scale(686), r2y - Scale(1), Scale(180), Scale(27));
-    g_state->btnModeToggle = makeBtn(IDC_BTN_MODE_TOGGLE, L"⚙ 高级模式", Scale(872), r2y - Scale(1), Scale(100), Scale(27));
+    g_state->btnAdvHelp = makeBtn(IDC_BTN_ADV_HELP, L"❓", 0, 0, Scale(32), Scale(26));
+    g_state->btnExportAll = makeBtn(IDC_BTN_EXPORT_ALL, L"📤 批量导出配置", 0, 0, Scale(148), Scale(26));
+    g_state->btnModeToggle = makeBtn(IDC_BTN_MODE_TOGGLE, L"⚙ 高级模式", 0, 0, Scale(112), Scale(26), true);
 
-    // ============ ② Server / Client 双 Tab 编辑区 ============
+    // ============ ② 隧道设置区 (每个 Item 简易模式只需 ID + Port) ============
+    g_state->grpRule = CreateWindowExW(0, L"BUTTON",
+                                       L"② 隧道设置 (简易模式：每个 Item 仅需设定 ID 与 Port，ID 默认给出随机值)",
+                                       WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                                       0, 0, Scale(980), Scale(62), hwnd, nullptr, hInst, nullptr);
+    SetFontRecursive(g_state->grpRule, g_state->hFontBold);
+
     g_state->tabMode = CreateWindowExW(0, WC_TABCONTROLW, L"",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TCS_TABS,
-                                       Scale(10), Scale(98), Scale(980), Scale(120), hwnd,
+                                       0, 0, Scale(256), Scale(28), hwnd,
                                        reinterpret_cast<HMENU>(IDC_TAB_MODE), hInst, nullptr);
     SetFontRecursive(g_state->tabMode, g_state->hFont);
 
     TCITEMW ti{};
     ti.mask = TCIF_TEXT;
-    ti.pszText = const_cast<LPWSTR>(L"📤 Server (暴露本机端口)");
+    ti.pszText = const_cast<LPWSTR>(L"📤 Server (暴露)");
     SendMessageW(g_state->tabMode, TCM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&ti));
-    ti.pszText = const_cast<LPWSTR>(L"📥 Client (连接远程端口)");
+    ti.pszText = const_cast<LPWSTR>(L"📥 Client (连接)");
     SendMessageW(g_state->tabMode, TCM_INSERTITEMW, 1, reinterpret_cast<LPARAM>(&ti));
     SendMessageW(g_state->tabMode, TCM_SETCURSEL, 0, 0);
 
-    // Tab 内控件 (父窗口仍为主窗口，位置由 LayoutTabChildren 摆放)
-    g_state->lblPreset = makeLabel(L"常用预设:", 0, 0, Scale(62), Scale(22));
+    g_state->lblPreset = makeLabel(L"常用预设:", 0, 0, Scale(60), Scale(22));
     g_state->cmbPreset = CreateWindowExW(0, L"COMBOBOX", L"",
                                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                         0, 0, Scale(185), Scale(220), hwnd,
+                                         0, 0, Scale(178), Scale(220), hwnd,
                                          reinterpret_cast<HMENU>(IDC_CMB_PRESET), hInst, nullptr);
     SetFontRecursive(g_state->cmbPreset, g_state->hFont);
     for (const auto& p : p2ptun::GetScenePresets()) {
@@ -910,41 +1020,48 @@ void CreateAllControls(HWND hwnd) {
     }
     SendMessageW(g_state->cmbPreset, CB_SETCURSEL, 0, 0);
 
-    g_state->lblRemark = makeLabel(L"备注说明:", 0, 0, Scale(62), Scale(22));
-    g_state->edtRemark = makeEdit(IDC_EDT_REMARK, L"本机远程桌面", 0, 0, Scale(140), Scale(24));
-    g_state->btnPastePair = makeBtn(IDC_BTN_PASTE_PAIR, L"📥 粘贴配对码一键导入并连接", 0, 0, Scale(298), Scale(28), true);
+    g_state->lblRemark = makeLabel(L"备注说明:", 0, 0, Scale(60), Scale(22));
+    g_state->edtRemark = makeEdit(IDC_EDT_REMARK, L"", 0, 0, Scale(140), Scale(24));
+    g_state->btnPastePair = makeBtn(IDC_BTN_PASTE_PAIR, L"📥 粘贴配对码一键导入", 0, 0, Scale(220), Scale(26), true);
 
-    g_state->lblName = makeLabel(L"隧道名称:", 0, 0, Scale(62), Scale(22));
-    g_state->edtName = makeEdit(IDC_EDT_NAME, L"home-rdp", 0, 0, Scale(140), Scale(24));
-    g_state->lblPort = makeLabel(L"暴露端口:", 0, 0, Scale(62), Scale(22));
-    g_state->edtPort = makeEdit(IDC_EDT_PORT, L"3389", 0, 0, Scale(110), Scale(24));
+    // ID 默认给出随机值
+    std::wstring init_rand_id = ToW(p2ptun::GenerateRandomTunnelId());
+    g_state->lblName = makeLabel(L"ID:", 0, 0, Scale(26), Scale(22));
+    g_state->edtName = makeEdit(IDC_EDT_NAME, init_rand_id.c_str(), 0, 0, Scale(150), Scale(24));
+    g_state->btnRandId = makeBtn(IDC_BTN_RAND_ID, L"🎲 随机", 0, 0, Scale(68), Scale(26));
+
+    g_state->lblPort = makeLabel(L"Port(暴露):", 0, 0, Scale(72), Scale(22));
+    g_state->edtPort = makeEdit(IDC_EDT_PORT, L"3389", 0, 0, Scale(120), Scale(24));
+
     g_state->lblProtoBw = makeLabel(L"协议/带宽:", 0, 0, Scale(62), Scale(22));
     g_state->cmbProto = CreateWindowExW(0, L"COMBOBOX", L"",
                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                        0, 0, Scale(80), Scale(120), hwnd,
+                                        0, 0, Scale(78), Scale(120), hwnd,
                                         reinterpret_cast<HMENU>(IDC_CMB_PROTO), hInst, nullptr);
     SetFontRecursive(g_state->cmbProto, g_state->hFont);
     SendMessageW(g_state->cmbProto, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"hy2"));
     SendMessageW(g_state->cmbProto, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"quic"));
     SendMessageW(g_state->cmbProto, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"classic"));
     SendMessageW(g_state->cmbProto, CB_SETCURSEL, 0, 0);
-    g_state->edtBw = makeEdit(IDC_EDT_BW, L"100", 0, 0, Scale(42), Scale(24), ES_NUMBER);
-    g_state->btnAddStart = makeBtn(IDC_BTN_ADD_START, L"➕ 保存规则并立即启动", 0, 0, Scale(250), Scale(28), true);
+    g_state->edtBw = makeEdit(IDC_EDT_BW, L"100", 0, 0, Scale(44), Scale(24), ES_NUMBER);
 
-    g_state->lblAdvRule = makeLabel(L"高级参数覆盖:", 0, 0, Scale(92), Scale(22));
-    g_state->edtAdvRule = makeEdit(IDC_EDT_ADV_RULE, L"", 0, 0, Scale(500), Scale(24));
-    g_state->chkOnDemand = CreateWindowExW(0, L"BUTTON", L"Client 按需连接 (空闲自动休眠)",
+    g_state->chkOnDemand = CreateWindowExW(0, L"BUTTON", L"Client 按需连接",
                                             WS_CHILD | BS_AUTOCHECKBOX,
-                                            0, 0, Scale(260), Scale(22), hwnd,
+                                            0, 0, Scale(116), Scale(22), hwnd,
                                             reinterpret_cast<HMENU>(IDC_CHK_ON_DEMAND), hInst, nullptr);
     SetFontRecursive(g_state->chkOnDemand, g_state->hFont);
+
+    g_state->btnAddStart = makeBtn(IDC_BTN_ADD_START, L"➕ 保存并立即启动", 0, 0, Scale(190), Scale(26), true);
+
+    g_state->lblAdvRule = makeLabel(L"高级参数覆盖:", 0, 0, Scale(88), Scale(22));
+    g_state->edtAdvRule = makeEdit(IDC_EDT_ADV_RULE, L"", 0, 0, Scale(500), Scale(24));
     SendMessageW(g_state->edtAdvRule, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(
-        L"留空=用上方全局高级默认; 填了则只覆盖本条: keepalive=15s ice_ports=40000-40100 ..."));
+        L"留空=用上方全局默认; 支持单条覆盖: secret=xxx keepalive=15s ice_ports=40000-40100 ..."));
 
     // ============ 列表 ============
     g_state->listTunnels = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-                                           Scale(10), Scale(224), Scale(980), Scale(260), hwnd,
+                                           Scale(10), Scale(140), Scale(980), Scale(320), hwnd,
                                            reinterpret_cast<HMENU>(IDC_LIST_TUNNELS), hInst, nullptr);
     SetFontRecursive(g_state->listTunnels, g_state->hFont);
     DWORD ex_style = LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER;
@@ -954,14 +1071,14 @@ void CreateAllControls(HWND hwnd) {
     const ColDef cols[] = {
         {L"启停", Scale(52)},
         {L"#", Scale(36)},
-        {L"运行状态", Scale(125)},
-        {L"模式 (Server/Client)", Scale(148)},
-        {L"备注说明", Scale(135)},
-        {L"隧道名称 (Name)", Scale(125)},
-        {L"端口地址", Scale(120)},
-        {L"协议/带宽", Scale(88)},
-        {L"实时速率 / 累计流量", Scale(160)},
-        {L"延迟 / 直连地址 / 状态详情", Scale(180)}
+        {L"运行状态", Scale(130)},
+        {L"角色 (Server/Client)", Scale(145)},
+        {L"ID", Scale(160)},
+        {L"Port (端口)", Scale(135)},
+        {L"备注说明", 0},            // 简易模式默认隐藏，高级模式展开
+        {L"协议/带宽", 0},           // 简易模式默认隐藏，高级模式展开
+        {L"实时速率 / 累计流量", Scale(165)},
+        {L"延迟 / 直连地址 / 状态详情", Scale(200)}
     };
     for (int i = 0; i < static_cast<int>(sizeof(cols) / sizeof(cols[0])); ++i) {
         LVCOLUMNW lvc{};
@@ -973,31 +1090,33 @@ void CreateAllControls(HWND hwnd) {
     }
 
     // ============ 操作按钮 ============
-    g_state->btnStartOne  = makeBtn(IDC_BTN_START_ONE,  L"▶ 启动选中", Scale(10), Scale(490), Scale(92), Scale(30), true);
-    g_state->btnStopOne   = makeBtn(IDC_BTN_STOP_ONE,   L"⏹ 停止选中", Scale(108), Scale(490), Scale(92), Scale(30));
-    g_state->btnReconnOne = makeBtn(IDC_BTN_RECONN_ONE, L"🔄 重连选中", Scale(206), Scale(490), Scale(92), Scale(30));
-    g_state->btnCopyPair  = makeBtn(IDC_BTN_COPY_PAIR,  L"📋 复制傻瓜配对码", Scale(304), Scale(490), Scale(146), Scale(30), true);
-    g_state->btnCopyCli   = makeBtn(IDC_BTN_COPY_CLI,   L"💻 复制命令行", Scale(456), Scale(490), Scale(115), Scale(30));
-    g_state->btnLaunchApp = makeBtn(IDC_BTN_LAUNCH_APP, L"🚀 打开客户端(RDP/Web)", Scale(577), Scale(490), Scale(155), Scale(30));
-    g_state->btnDeleteOne = makeBtn(IDC_BTN_DELETE_ONE, L"🗑 删除选中", Scale(738), Scale(490), Scale(90), Scale(30));
-    g_state->btnStartAll  = makeBtn(IDC_BTN_START_ALL,  L"▶ 全部启动", Scale(834), Scale(490), Scale(92), Scale(30));
-    g_state->btnStopAll   = makeBtn(IDC_BTN_STOP_ALL,   L"⏹ 全部停止", Scale(932), Scale(490), Scale(92), Scale(30));
+    g_state->btnStartOne  = makeBtn(IDC_BTN_START_ONE,  L"▶ 启动选中", 0, 0, Scale(92), Scale(30), true);
+    g_state->btnStopOne   = makeBtn(IDC_BTN_STOP_ONE,   L"⏹ 停止选中", 0, 0, Scale(92), Scale(30));
+    g_state->btnReconnOne = makeBtn(IDC_BTN_RECONN_ONE, L"🔄 重连选中", 0, 0, Scale(92), Scale(30));
+    g_state->btnCopyPair  = makeBtn(IDC_BTN_COPY_PAIR,  L"📋 复制傻瓜配对码", 0, 0, Scale(146), Scale(30), true);
+    g_state->btnCopyCli   = makeBtn(IDC_BTN_COPY_CLI,   L"💻 复制命令行", 0, 0, Scale(115), Scale(30));
+    g_state->btnLaunchApp = makeBtn(IDC_BTN_LAUNCH_APP, L"🚀 打开客户端(RDP/Web)", 0, 0, Scale(155), Scale(30));
+    g_state->btnDeleteOne = makeBtn(IDC_BTN_DELETE_ONE, L"🗑 删除选中", 0, 0, Scale(90), Scale(30));
+    g_state->btnStartAll  = makeBtn(IDC_BTN_START_ALL,  L"▶ 全部启动", 0, 0, Scale(92), Scale(30));
+    g_state->btnStopAll   = makeBtn(IDC_BTN_STOP_ALL,   L"⏹ 全部停止", 0, 0, Scale(92), Scale(30));
 
     // ============ 日志区 ============
     g_state->grpLogs = CreateWindowExW(0, L"BUTTON",
                                        L"③ 多隧道实时运行日志 (每行左侧 ▶/⏹ 按钮可独立启停；双击行也可切换)",
                                        WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-                                       Scale(10), Scale(528), Scale(980), Scale(160), hwnd, nullptr, hInst, nullptr);
+                                       0, 0, Scale(980), Scale(160), hwnd, nullptr, hInst, nullptr);
     SetFontRecursive(g_state->grpLogs, g_state->hFontBold);
 
-    g_state->btnClearLog = makeBtn(IDC_BTN_CLEAR_LOG, L"清空日志", Scale(900), Scale(542), Scale(80), Scale(22));
+    g_state->btnClearLog = makeBtn(IDC_BTN_CLEAR_LOG, L"清空日志", 0, 0, Scale(80), Scale(22));
     g_state->edtLogs = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
-                                       Scale(18), Scale(568), Scale(964), Scale(112), hwnd,
+                                       0, 0, Scale(964), Scale(112), hwnd,
                                        reinterpret_cast<HMENU>(IDC_EDT_LOGS), hInst, nullptr);
     SetFontRecursive(g_state->edtLogs, g_state->hFontMono);
 
-    LayoutTabChildren();
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    LayoutControls(rc.right, rc.bottom);
 }
 
 void HandleCommand(HWND hwnd, int id, int notify_code) {
@@ -1024,6 +1143,17 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
     }
 
     switch (id) {
+        case IDC_BTN_RAND_SECRET: {
+            SetCtrlTextU8(g_state->edtDefSecret, p2ptun::GenerateRandomSecret());
+            break;
+        }
+
+        case IDC_BTN_RAND_ID: {
+            g_state->editing_rule_id.clear();
+            SetCtrlTextU8(g_state->edtName, p2ptun::GenerateRandomTunnelId());
+            break;
+        }
+
         case IDC_BTN_BROWSE_EXE: {
             wchar_t file_buf[MAX_PATH]{};
             OPENFILENAMEW ofn{};
@@ -1042,6 +1172,10 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
         case IDC_BTN_SAVE_GLOBAL: {
             std::string exe_path = GetCtrlTextU8(g_state->edtExePath);
             std::string def_sec = GetCtrlTextU8(g_state->edtDefSecret);
+            if (def_sec.empty()) {
+                def_sec = p2ptun::GenerateRandomSecret();
+                SetCtrlTextU8(g_state->edtDefSecret, def_sec);
+            }
             int p_idx = static_cast<int>(SendMessageW(g_state->cmbDefProto, CB_GETCURSEL, 0, 0));
             std::string def_proto = (p_idx == 1) ? "quic" : (p_idx == 2 ? "classic" : "hy2");
             int def_bw = std::atoi(GetCtrlTextU8(g_state->edtDefBw).c_str());
@@ -1051,12 +1185,13 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
             if (!g_state->mgr->UpdateGlobalSettings(exe_path, def_sec, def_proto, def_bw, min_tray, err)) {
                 MessageBoxW(hwnd, ToW(err).c_str(), L"保存失败", MB_ICONERROR);
             } else {
-                // 全局高级默认值一并保存
-                p2ptun::AppConfig cfg2 = g_state->mgr->GetConfig();
-                ApplyAdvStringToGlobal(GetCtrlTextU8(g_state->edtAdvGlobal), cfg2);
-                std::string adv_err;
-                if (!g_state->mgr->UpdateAdvancedDefaults(cfg2, adv_err)) {
-                    MessageBoxW(hwnd, ToW(adv_err).c_str(), L"高级默认保存失败", MB_ICONERROR);
+                if (g_state->advanced_mode) {
+                    p2ptun::AppConfig cfg2 = g_state->mgr->GetConfig();
+                    ApplyAdvStringToGlobal(GetCtrlTextU8(g_state->edtAdvGlobal), cfg2);
+                    std::string adv_err;
+                    if (!g_state->mgr->UpdateAdvancedDefaults(cfg2, adv_err)) {
+                        MessageBoxW(hwnd, ToW(adv_err).c_str(), L"高级默认保存失败", MB_ICONERROR);
+                    }
                 }
                 RefreshTunnelListView();
                 MessageBoxW(hwnd, L"全局设置已保存到 config.json！", L"保存成功", MB_ICONINFORMATION);
@@ -1065,7 +1200,6 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
         }
 
         case IDC_BTN_EXPORT_ALL: {
-            // 批量导出：完整 config.json (含全部规则 + 全局设置)
             wchar_t file_buf[MAX_PATH]{};
             OPENFILENAMEW ofn{};
             ofn.lStructSize = sizeof(ofn);
@@ -1094,45 +1228,70 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
         }
 
         case IDC_BTN_ADD_START: {
+            // 若用户修改了上方 Secret 但还没点保存，自动同步全局 Secret
+            std::string cur_sec = GetCtrlTextU8(g_state->edtDefSecret);
+            if (cur_sec.empty()) {
+                cur_sec = p2ptun::GenerateRandomSecret();
+                SetCtrlTextU8(g_state->edtDefSecret, cur_sec);
+            }
+            p2ptun::AppConfig cur_cfg = g_state->mgr->GetConfig();
+            if (cur_sec != cur_cfg.default_secret) {
+                std::string sec_err;
+                g_state->mgr->UpdateGlobalSettings(cur_cfg.p2ptun_path, cur_sec, cur_cfg.default_proto,
+                                                   cur_cfg.default_bandwidth, cur_cfg.minimize_to_tray, sec_err);
+            }
+
             p2ptun::TunnelRule r;
-            r.mode = CurrentTabMode();   // Tab 页决定 Server/Client
-            r.remark = GetCtrlTextU8(g_state->edtRemark);
+            r.mode = CurrentTabMode();
             r.name = GetCtrlTextU8(g_state->edtName);
-            r.port = GetCtrlTextU8(g_state->edtPort);
-            int pr_idx = static_cast<int>(SendMessageW(g_state->cmbProto, CB_GETCURSEL, 0, 0));
-            r.proto = (pr_idx == 1) ? "quic" : (pr_idx == 2 ? "classic" : "hy2");
-            r.bandwidth_mbps = std::atoi(GetCtrlTextU8(g_state->edtBw).c_str());
-            r.enabled = true;
-            if (r.mode == "connect" && g_state->advanced_mode) {
-                r.on_demand = (SendMessageW(g_state->chkOnDemand, BM_GETCHECK, 0, 0) == BST_CHECKED);
-            }
-
-            // 单规则高级参数覆盖 (留空字段在 BuildSubprocessArgs 里回退全局默认)
-            ApplyAdvStringToRule(GetCtrlTextU8(g_state->edtAdvRule), r);
-
             if (r.name.empty()) {
-                MessageBoxW(hwnd, L"请填写【隧道名称】(Server 与 Client 两端填相同名称即可配对)！", L"提示", MB_ICONWARNING);
-                SetFocus(g_state->edtName);
-                return;
+                // ID 为空时自动生成随机值
+                r.name = p2ptun::GenerateRandomTunnelId();
+                SetCtrlTextU8(g_state->edtName, r.name);
             }
+            r.id = r.name;
+            r.port = GetCtrlTextU8(g_state->edtPort);
             if (r.port.empty()) {
-                MessageBoxW(hwnd, L"请填写端口 (直接填数字如 3389 或 1080 即可)！", L"提示", MB_ICONWARNING);
+                MessageBoxW(hwnd, L"请填写端口 Port (直接填数字如 3389 或 1080 即可)！", L"提示", MB_ICONWARNING);
                 SetFocus(g_state->edtPort);
                 return;
             }
 
-            if (!g_state->editing_rule_id.empty()) {
-                for (const auto& existing : g_state->cached_rows) {
-                    if (existing.id == g_state->editing_rule_id && existing.name == r.name && existing.mode == r.mode) {
-                        r.id = existing.id;
-                        break;
-                    }
+            // 检查是否正在更新已有项
+            bool updating_existing = false;
+            for (const auto& existing : g_state->cached_rows) {
+                if (existing.id == r.id || (!g_state->editing_rule_id.empty() && existing.id == g_state->editing_rule_id && existing.name == r.name)) {
+                    r = existing.rule;
+                    r.mode = CurrentTabMode();
+                    r.id = GetCtrlTextU8(g_state->edtName);
+                    r.name = r.id;
+                    r.port = GetCtrlTextU8(g_state->edtPort);
+                    updating_existing = true;
+                    break;
                 }
             }
 
+            if (g_state->advanced_mode) {
+                r.remark = GetCtrlTextU8(g_state->edtRemark);
+                int pr_idx = static_cast<int>(SendMessageW(g_state->cmbProto, CB_GETCURSEL, 0, 0));
+                r.proto = (pr_idx == 1) ? "quic" : (pr_idx == 2 ? "classic" : "hy2");
+                r.bandwidth_mbps = std::atoi(GetCtrlTextU8(g_state->edtBw).c_str());
+                if (r.mode == "connect") {
+                    r.on_demand = (SendMessageW(g_state->chkOnDemand, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                }
+                ApplyAdvStringToRule(GetCtrlTextU8(g_state->edtAdvRule), r);
+            }
+            r.enabled = true;
+
             std::string out_id, err;
             bool ok = g_state->mgr->AddOrUpdateRule(r, true, out_id, err);
-            g_state->editing_rule_id = out_id;
+            if (!updating_existing) {
+                // 新增项保存后，为下一次新增预填一个新的随机 ID
+                g_state->editing_rule_id.clear();
+                SetCtrlTextU8(g_state->edtName, p2ptun::GenerateRandomTunnelId());
+            } else {
+                g_state->editing_rule_id = out_id;
+            }
             RefreshTunnelListView();
             if (!ok && !err.empty()) {
                 MessageBoxW(hwnd, ToW(err).c_str(), L"启动提示", MB_ICONWARNING);
@@ -1201,7 +1360,7 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
             const auto& row = g_state->cached_rows[static_cast<size_t>(idx)];
             CopyTextToClipboard(hwnd, row.pairing_uri);
             std::string msg = "已复制傻瓜配对码到剪贴板：\n\n" + row.pairing_uri +
-                              "\n\n发给另一台电脑后，对方只需点击【📥 粘贴配对码一键导入并连接】即可自动填好所有参数并连通！";
+                              "\n\n发给另一台电脑后，对方只需填写相同 ID（或在高级模式粘贴配对码）即可连通！";
             MessageBoxW(hwnd, ToW(msg).c_str(), L"配对码已复制", MB_ICONINFORMATION);
             break;
         }
@@ -1240,6 +1399,7 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
                 std::string err;
                 g_state->mgr->DeleteRule(tid, err);
                 g_state->editing_rule_id.clear();
+                SetCtrlTextU8(g_state->edtName, p2ptun::GenerateRandomTunnelId());
                 RefreshTunnelListView();
             }
             break;
@@ -1265,7 +1425,7 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
             RECT rc{};
             GetClientRect(hwnd, &rc);
             LayoutControls(rc.right, rc.bottom);
-            LayoutTabChildren();
+            RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
             break;
         }
 
@@ -1275,21 +1435,21 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
                     "■ 全局默认框: 对所有规则生效 (规则未覆盖时回退到这里)\n"
                     "■ 规则覆盖框: 只对当前编辑的规则生效，覆盖同名的全局默认\n\n"
                     "支持的 key:\n"
-                    "  broker=wss://0.peerjs.com     信令服务器列表(逗号分隔)\n"
-                    "  stun=stun:stun.example.com    STUN 列表\n"
-                    "  turn=turn:user:pass@host:3478  TURN 中继\n"
-                    "  proxy=http://127.0.0.1:7890    信令代理\n"
-                    "  key=peerjs                     PeerJS API Key\n"
-                    "  keepalive=15s                  隧道心跳间隔\n"
-                    "  ice_ports=40000-40100          ICE UDP 端口范围\n"
-                    "  nat1to1=203.0.113.10           1:1 NAT 外部 IP\n"
-                    "  idle_timeout=30m               Client 按需模式空闲休眠\n"
-                    "  max_peers=32                   Server 最大并发客户端\n"
-                    "  on_demand=1                    Client 按需连接模式\n"
-                    "  force_relay=1                  强制 TURN 中继\n"
-                    "  keep_proxy=1                   保留系统环境代理\n\n"
-                    "所有 key 留空 = 使用 p2ptun 内置默认值。密钥不需要在这里填——\n"
-                    "统一在上方【默认密钥】配置，只此一处。").c_str(),
+                    "  secret=my-custom-sec           单条隧道独立密钥覆盖(留空=用全局Secret)\n"
+                    "  broker=wss://0.peerjs.com      信令服务器列表(逗号分隔)\n"
+                    "  stun=stun:stun.example.com     STUN 列表\n"
+                    "  turn=turn:user:pass@host:3478   TURN 中继\n"
+                    "  proxy=http://127.0.0.1:7890     信令代理\n"
+                    "  key=peerjs                      PeerJS API Key\n"
+                    "  keepalive=15s                   隧道心跳间隔\n"
+                    "  ice_ports=40000-40100           ICE UDP 端口范围\n"
+                    "  nat1to1=203.0.113.10            1:1 NAT 外部 IP\n"
+                    "  idle_timeout=30m                Client 按需模式空闲休眠\n"
+                    "  max_peers=32                    Server 最大并发客户端\n"
+                    "  on_demand=1                     Client 按需连接模式\n"
+                    "  force_relay=1                   强制 TURN 中继\n"
+                    "  keep_proxy=1                    保留系统环境代理\n\n"
+                    "简易模式下只需要配置全局 Secret（默认全等）以及每条隧道的 ID（默认随机）和 Port。").c_str(),
                 L"高级参数说明", MB_ICONINFORMATION);
             break;
         }
@@ -1333,7 +1493,6 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         }
 
         case WM_DPICHANGED: {
-            // 跨屏拖动时更新缩放并按建议矩形重设窗口大小
             UpdateDpiFromWindow(hwnd);
             RECT* suggested = reinterpret_cast<RECT*>(lParam);
             SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
@@ -1343,14 +1502,13 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             RECT rc{};
             GetClientRect(hwnd, &rc);
             LayoutControls(rc.right, rc.bottom);
-            LayoutTabChildren();
+            RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
             return 0;
         }
 
         case WM_SIZE: {
             if (wParam != SIZE_MINIMIZED) {
                 LayoutControls(LOWORD(lParam), HIWORD(lParam));
-                LayoutTabChildren();
             }
             return 0;
         }
@@ -1358,7 +1516,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_GETMINMAXINFO: {
             MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
             mmi->ptMinTrackSize.x = Scale(1040);
-            mmi->ptMinTrackSize.y = Scale(660);
+            mmi->ptMinTrackSize.y = Scale(640);
             return 0;
         }
 
@@ -1444,8 +1602,6 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 }
 
 int RunGuiMain(HINSTANCE hInstance, int nCmdShow) {
-    // 单实例守护: 已有实例运行时弹出提示并退出，
-    // 避免两个 GUI 同时管理同一批 p2ptun.exe 子进程造成 JobObject 竞态。
     HANDLE single_mutex = CreateMutexW(nullptr, TRUE, L"Global\\P2PTunManager_SingleInstance_Mutex");
     if (single_mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBoxW(nullptr, L"p2ptun 管理器已在运行中 (请检查任务栏或系统托盘)。",
@@ -1479,12 +1635,11 @@ int RunGuiMain(HINSTANCE hInstance, int nCmdShow) {
     wc.hIconSm = wc.hIcon;
     RegisterClassExW(&wc);
 
-    // 窗口初始尺寸按 DPI 缩放 (96-DPI 基准 1060x700)
     UpdateDpiFromWindow(GetDesktopWindow());
     HWND hwnd = CreateWindowExW(
         0,
         kClassName,
-        L"p2ptun Windows 多端口穿透管理器 (Server / Client 双页 · 高 DPI 自适应)",
+        L"p2ptun Windows 多端口穿透管理器 (简易模式 / 高级模式 · 高 DPI 自适应)",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, Scale(1060), Scale(700),
         nullptr, nullptr, hInstance, nullptr);

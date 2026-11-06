@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <map>
 #include <random>
+#include <set>
 #include <sstream>
 
 namespace p2ptun {
@@ -391,13 +392,20 @@ private:
 
 TunnelRule RuleFromJsonValue(const JsonValue& v, const std::string& forced_mode, const std::string& def_proto, int def_bw) {
     TunnelRule r;
-    r.id = v.GetString("id");
+    r.id = Trim(v.GetString("id"));
     r.mode = v.GetString("mode", forced_mode);
     r.last_role = v.GetString("last_role");
     r.remark = v.GetString("remark");
-    r.name = v.GetString("name");
+    r.name = Trim(v.GetString("name"));
     if (r.name.empty()) {
-        r.name = v.GetString("peer");
+        r.name = Trim(v.GetString("peer"));
+    }
+    // 简易模式每个 item 仅需 id 与 port：当仅提供 id 时，name 与 id 自动保持一致
+    if (r.name.empty() && !r.id.empty()) {
+        r.name = r.id;
+    }
+    if (r.id.empty() && !r.name.empty()) {
+        r.id = r.name;
     }
     r.port = v.GetString("port");
     if (r.port.empty()) {
@@ -405,6 +413,7 @@ TunnelRule RuleFromJsonValue(const JsonValue& v, const std::string& forced_mode,
         std::string listen = v.GetString("listen");
         r.port = !target.empty() ? target : listen;
     }
+    r.secret = Trim(v.GetString("secret"));
     r.proto = v.GetString("proto", def_proto);
     r.bandwidth_mbps = static_cast<int>(v.GetInt64("bandwidth_mbps", v.GetInt64("bandwidth", def_bw)));
     r.on_demand = v.GetBool("on_demand", false);
@@ -426,44 +435,68 @@ TunnelRule RuleFromJsonValue(const JsonValue& v, const std::string& forced_mode,
     return NormalizeRule(r, forced_mode, def_proto, def_bw);
 }
 
+// 简易设置中每个 item 只需写 id 和 port；仅当设置了高级/非默认参数时才写入额外字段
 void WriteRuleJson(std::ostringstream& oss, const TunnelRule& r, int indent) {
     std::string pad(indent, ' ');
     std::string pad2(indent + 2, ' ');
+    std::string item_id = !Trim(r.id).empty() ? Trim(r.id) : Trim(r.name);
     oss << pad << "{\n";
-    oss << pad2 << "\"id\": \"" << JsonEscape(r.id) << "\",\n";
-    if (!Trim(r.last_role).empty()) {
+    oss << pad2 << "\"id\": \"" << JsonEscape(item_id) << "\",\n";
+    if (!Trim(r.name).empty() && Trim(r.name) != item_id) {
+        oss << pad2 << "\"name\": \"" << JsonEscape(Trim(r.name)) << "\",\n";
+    }
+    if (r.mode == "connect") {
+        oss << pad2 << "\"mode\": \"connect\",\n";
+    }
+    if (!Trim(r.last_role).empty() && Trim(r.last_role) != "expose") {
         oss << pad2 << "\"last_role\": \"" << JsonEscape(Trim(r.last_role)) << "\",\n";
     }
-    oss << pad2 << "\"remark\": \"" << JsonEscape(r.remark) << "\",\n";
-    oss << pad2 << "\"name\": \"" << JsonEscape(r.name) << "\",\n";
-    oss << pad2 << "\"port\": \"" << JsonEscape(r.port) << "\",\n";
-    oss << pad2 << "\"proto\": \"" << JsonEscape(NormalizeProto(r.proto)) << "\",\n";
-    oss << pad2 << "\"bandwidth_mbps\": " << (r.bandwidth_mbps > 0 ? r.bandwidth_mbps : 100) << ",\n";
+    if (!Trim(r.remark).empty()) {
+        oss << pad2 << "\"remark\": \"" << JsonEscape(Trim(r.remark)) << "\",\n";
+    }
+    if (!Trim(r.secret).empty()) {
+        oss << pad2 << "\"secret\": \"" << JsonEscape(Trim(r.secret)) << "\",\n";
+    }
+    if (NormalizeProto(r.proto) != "hy2") {
+        oss << pad2 << "\"proto\": \"" << JsonEscape(NormalizeProto(r.proto)) << "\",\n";
+    }
+    if (r.bandwidth_mbps > 0 && r.bandwidth_mbps != 100) {
+        oss << pad2 << "\"bandwidth_mbps\": " << r.bandwidth_mbps << ",\n";
+    }
     if (r.mode == "connect" && r.on_demand) {
         oss << pad2 << "\"on_demand\": true,\n";
     }
-    if (!Trim(r.broker).empty())    oss << pad2 << "\"broker\": \"" << JsonEscape(r.broker) << "\",\n";
-    if (!Trim(r.stun).empty())      oss << pad2 << "\"stun\": \"" << JsonEscape(r.stun) << "\",\n";
-    if (!Trim(r.turn).empty())      oss << pad2 << "\"turn\": \"" << JsonEscape(r.turn) << "\",\n";
-    if (!Trim(r.proxy).empty())     oss << pad2 << "\"proxy\": \"" << JsonEscape(r.proxy) << "\",\n";
-    if (!Trim(r.peer_key).empty())  oss << pad2 << "\"peer_key\": \"" << JsonEscape(r.peer_key) << "\",\n";
-    if (!Trim(r.keepalive).empty()) oss << pad2 << "\"keepalive\": \"" << JsonEscape(r.keepalive) << "\",\n";
-    if (!Trim(r.ice_ports).empty()) oss << pad2 << "\"ice_ports\": \"" << JsonEscape(r.ice_ports) << "\",\n";
-    if (!Trim(r.nat1to1).empty())   oss << pad2 << "\"nat1to1\": \"" << JsonEscape(r.nat1to1) << "\",\n";
+    if (!Trim(r.broker).empty())       oss << pad2 << "\"broker\": \"" << JsonEscape(r.broker) << "\",\n";
+    if (!Trim(r.stun).empty())         oss << pad2 << "\"stun\": \"" << JsonEscape(r.stun) << "\",\n";
+    if (!Trim(r.turn).empty())         oss << pad2 << "\"turn\": \"" << JsonEscape(r.turn) << "\",\n";
+    if (!Trim(r.proxy).empty())        oss << pad2 << "\"proxy\": \"" << JsonEscape(r.proxy) << "\",\n";
+    if (!Trim(r.peer_key).empty())     oss << pad2 << "\"peer_key\": \"" << JsonEscape(r.peer_key) << "\",\n";
+    if (!Trim(r.keepalive).empty())    oss << pad2 << "\"keepalive\": \"" << JsonEscape(r.keepalive) << "\",\n";
+    if (!Trim(r.ice_ports).empty())    oss << pad2 << "\"ice_ports\": \"" << JsonEscape(r.ice_ports) << "\",\n";
+    if (!Trim(r.nat1to1).empty())      oss << pad2 << "\"nat1to1\": \"" << JsonEscape(r.nat1to1) << "\",\n";
     if (!Trim(r.idle_timeout).empty()) oss << pad2 << "\"idle_timeout\": \"" << JsonEscape(r.idle_timeout) << "\",\n";
-    if (r.keep_proxy)               oss << pad2 << "\"keep_proxy\": true,\n";
-    if (r.force_relay)              oss << pad2 << "\"force_relay\": true,\n";
-    if (r.max_peers > 0)            oss << pad2 << "\"max_peers\": " << r.max_peers << ",\n";
-    if (!r.auto_restart)            oss << pad2 << "\"auto_restart\": false,\n";
-    oss << pad2 << "\"enabled\": " << (r.enabled ? "true" : "false") << "\n";
+    if (r.keep_proxy)                  oss << pad2 << "\"keep_proxy\": true,\n";
+    if (r.force_relay)                 oss << pad2 << "\"force_relay\": true,\n";
+    if (r.max_peers > 0)               oss << pad2 << "\"max_peers\": " << r.max_peers << ",\n";
+    if (!r.auto_restart)               oss << pad2 << "\"auto_restart\": false,\n";
+    if (r.enabled)                     oss << pad2 << "\"enabled\": true,\n";
+    oss << pad2 << "\"port\": \"" << JsonEscape(r.port) << "\"\n";
     oss << pad << "}";
 }
 
 } // namespace
 
+std::string GenerateRandomTunnelId() {
+    return "tun-" + RandomHex(6);
+}
+
+std::string GenerateRandomSecret() {
+    return "p2p-" + RandomHex(6);
+}
+
 std::vector<ScenePreset> GetScenePresets() {
     return {
-        {"自定义端口 (自由填写)", "暴露本机服务", "连接远程服务", "my-tunnel", "8080", "18080"},
+        {"自定义端口 (自由填写)", "暴露本机服务", "连接远程服务", "", "8080", "18080"},
         {"🖥 远程桌面 RDP (3389)", "本机远程桌面 (RDP)", "连接家里远程桌面", "home-rdp", "3389", "13389"},
         {"💻 SSH / WSL2 终端 (22)", "本机 SSH 服务", "连接远程 SSH", "home-ssh", "22", "2222"},
         {"🌐 SOCKS5 / HTTP 代理 (1080)", "本机代理端口 (1080)", "连接远程代理 (1080)", "my-proxy", "1080", "1080"},
@@ -571,24 +604,25 @@ TunnelRule NormalizeRule(TunnelRule r, const std::string& forced_mode, const std
     if (r.mode != "expose" && r.mode != "connect") {
         r.mode = "expose";
     }
-    r.name = Trim(r.name);
-    if (r.name.empty()) {
-        r.name = "tun-" + RandomHex(4);
-    }
     r.id = Trim(r.id);
+    r.name = Trim(r.name);
+    if (r.name.empty() && !r.id.empty()) {
+        r.name = r.id;
+    }
+    if (r.name.empty()) {
+        r.name = GenerateRandomTunnelId();
+    }
     if (r.id.empty()) {
-        r.id = r.mode + "-" + r.name + "-" + RandomHex(4);
+        r.id = r.name;
     }
     std::string def_port = (r.mode == "connect") ? "13389" : "3389";
     r.port = NormalizeEndpoint(r.port, def_port);
+    r.secret = Trim(r.secret);
     r.proto = NormalizeProto(r.proto.empty() ? def_proto : r.proto);
     if (r.bandwidth_mbps <= 0) {
         r.bandwidth_mbps = (def_bw > 0) ? def_bw : 100;
     }
     r.remark = Trim(r.remark);
-    if (r.remark.empty()) {
-        r.remark = (r.mode == "expose" ? "暴露端口 " : "连接隧道 ") + ExtractPortOnly(r.port);
-    }
 
     // 高级参数规范化：仅 trim + 合法性回退，留空即"不传该 flag"
     r.broker = Trim(r.broker);
@@ -613,7 +647,7 @@ void NormalizeAppConfig(AppConfig& cfg) {
     }
     cfg.default_secret = Trim(cfg.default_secret);
     if (cfg.default_secret.empty()) {
-        cfg.default_secret = "p2p-" + RandomHex(6);
+        cfg.default_secret = GenerateRandomSecret();
     }
     cfg.default_proto = NormalizeProto(cfg.default_proto);
     if (cfg.default_bandwidth <= 0) {
@@ -623,10 +657,15 @@ void NormalizeAppConfig(AppConfig& cfg) {
     if (!cfg.tunnels.empty()) {
         cfg.expose.clear();
         cfg.connect.clear();
+        std::set<std::string> seen_ids;
         for (auto& r : cfg.tunnels) {
             std::string forced = r.mode.empty() ? "expose" : r.mode;
             r = NormalizeRule(r, forced, cfg.default_proto, cfg.default_bandwidth);
             if (Trim(r.last_role).empty()) r.last_role = r.mode;
+            if (seen_ids.count(r.id)) {
+                r.id = r.id + "-" + RandomHex(4);
+            }
+            seen_ids.insert(r.id);
         }
     } else {
         for (auto& r : cfg.expose) {
@@ -643,43 +682,31 @@ void NormalizeAppConfig(AppConfig& cfg) {
 AppConfig CreateDefaultAppConfig() {
     AppConfig cfg;
     cfg.p2ptun_path = "p2ptun.exe";
-    cfg.default_secret = "p2p-" + RandomHex(6);
+    cfg.default_secret = GenerateRandomSecret();
     cfg.default_proto = "hy2";
     cfg.default_bandwidth = 100;
     cfg.minimize_to_tray = true;
 
     TunnelRule rdp;
-    rdp.id = "tunnel-rdp";
-    rdp.remark = "远程桌面 (RDP)";
-    rdp.name = "my-rdp";
+    rdp.id = GenerateRandomTunnelId();
+    rdp.name = rdp.id;
     rdp.port = "127.0.0.1:3389";
-    rdp.proto = "hy2";
-    rdp.bandwidth_mbps = 100;
     rdp.mode = "expose";
     rdp.last_role = "expose";
-    rdp.enabled = false;
 
     TunnelRule ssh;
-    ssh.id = "tunnel-ssh";
-    ssh.remark = "SSH / WSL2";
-    ssh.name = "my-ssh";
+    ssh.id = GenerateRandomTunnelId();
+    ssh.name = ssh.id;
     ssh.port = "127.0.0.1:22";
-    ssh.proto = "hy2";
-    ssh.bandwidth_mbps = 100;
     ssh.mode = "expose";
     ssh.last_role = "expose";
-    ssh.enabled = false;
 
     TunnelRule proxy;
-    proxy.id = "tunnel-proxy";
-    proxy.remark = "代理 (SOCKS5/HTTP)";
-    proxy.name = "my-proxy";
+    proxy.id = GenerateRandomTunnelId();
+    proxy.name = proxy.id;
     proxy.port = "127.0.0.1:1080";
-    proxy.proto = "hy2";
-    proxy.bandwidth_mbps = 100;
     proxy.mode = "expose";
     proxy.last_role = "expose";
-    proxy.enabled = false;
 
     cfg.tunnels = {rdp, ssh, proxy};
     return cfg;
@@ -691,11 +718,19 @@ std::string SerializeAppConfigToJson(const AppConfig& input_cfg) {
 
     std::ostringstream oss;
     oss << "{\n";
-    oss << "  \"p2ptun_path\": \"" << JsonEscape(cfg.p2ptun_path) << "\",\n";
-    oss << "  \"default_secret\": \"" << JsonEscape(cfg.default_secret) << "\",\n";
-    oss << "  \"default_proto\": \"" << JsonEscape(cfg.default_proto) << "\",\n";
-    oss << "  \"default_bandwidth\": " << cfg.default_bandwidth << ",\n";
-    oss << "  \"minimize_to_tray\": " << (cfg.minimize_to_tray ? "true" : "false") << ",\n";
+    oss << "  \"secret\": \"" << JsonEscape(cfg.default_secret) << "\",\n";
+    if (!cfg.p2ptun_path.empty() && cfg.p2ptun_path != "p2ptun.exe") {
+        oss << "  \"p2ptun_path\": \"" << JsonEscape(cfg.p2ptun_path) << "\",\n";
+    }
+    if (cfg.default_proto != "hy2") {
+        oss << "  \"default_proto\": \"" << JsonEscape(cfg.default_proto) << "\",\n";
+    }
+    if (cfg.default_bandwidth != 100) {
+        oss << "  \"default_bandwidth\": " << cfg.default_bandwidth << ",\n";
+    }
+    if (!cfg.minimize_to_tray) {
+        oss << "  \"minimize_to_tray\": false,\n";
+    }
 
     if (!cfg.adv_broker.empty() || !cfg.adv_stun.empty() || !cfg.adv_turn.empty() ||
         !cfg.adv_proxy.empty() || !cfg.adv_peer_key.empty() || !cfg.adv_keepalive.empty() ||
@@ -735,7 +770,7 @@ std::string SerializeAppConfigToJson(const AppConfig& input_cfg) {
         }
         oss << "\n  },\n";
     }
-    // 新格式: 单一 tunnels 数组 (每条自带 mode=上次角色；运行时可自选角色)
+    // 统一 tunnels 数组 (简易模式下每项仅包含 id 和 port)
     oss << "  \"tunnels\": [";
     if (!cfg.tunnels.empty()) oss << "\n";
     for (size_t i = 0; i < cfg.tunnels.size(); ++i) {
@@ -761,7 +796,11 @@ bool ParseAppConfigFromJson(const std::string& json_text, AppConfig& out_cfg, st
 
     AppConfig cfg;
     cfg.p2ptun_path = root.GetString("p2ptun_path", "p2ptun.exe");
-    cfg.default_secret = root.GetString("default_secret", "p2p-123456");
+    std::string sec = Trim(root.GetString("secret"));
+    if (sec.empty()) {
+        sec = Trim(root.GetString("default_secret"));
+    }
+    cfg.default_secret = sec.empty() ? GenerateRandomSecret() : sec;
     cfg.default_proto = NormalizeProto(root.GetString("default_proto", "hy2"));
     cfg.default_bandwidth = static_cast<int>(root.GetInt64("default_bandwidth", 100));
     cfg.minimize_to_tray = root.GetBool("minimize_to_tray", true);
@@ -817,13 +856,11 @@ bool ParseAppConfigFromJson(const std::string& json_text, AppConfig& out_cfg, st
 
     if (const JsonValue* flat = root.Get("tunnels")) {
         if (flat->type == JsonValue::kArray) {
-            // 新格式: 角色无关统一列表。mode 字段只作为 "上次角色" 提示 (缺省 expose)，
-            // 运行时可自由切换 expose/connect。写入时归入 tunnels 列表。
             for (const auto& item : flat->arr_val) {
                 if (item.type == JsonValue::kObject) {
                     TunnelRule r = RuleFromJsonValue(item, "", cfg.default_proto, cfg.default_bandwidth);
                     if (r.last_role.empty() && !r.mode.empty()) {
-                        r.last_role = r.mode; // 旧字段迁移
+                        r.last_role = r.mode;
                     }
                     cfg.tunnels.push_back(r);
                 }
@@ -911,13 +948,14 @@ bool ParseStatusSnapshotJson(const std::string& json_text, StatusSnapshot& out_s
 }
 
 std::string BuildPairingUri(const TunnelRule& r, const std::string& default_secret) {
-    std::string secret = Trim(default_secret);
+    std::string secret = !Trim(r.secret).empty() ? Trim(r.secret) : Trim(default_secret);
     std::string port = (r.mode == "expose") ? SuggestConnectPort(r.port) : ExtractPortOnly(r.port);
     std::string proto = NormalizeProto(r.proto);
     int bw = r.bandwidth_mbps > 0 ? r.bandwidth_mbps : 100;
+    std::string tun_id = !Trim(r.name).empty() ? Trim(r.name) : Trim(r.id);
 
     std::ostringstream oss;
-    oss << "p2ptun://connect?name=" << UrlEncode(r.name)
+    oss << "p2ptun://connect?name=" << UrlEncode(tun_id)
         << "&secret=" << UrlEncode(secret)
         << "&port=" << UrlEncode(port)
         << "&proto=" << UrlEncode(proto)
@@ -939,14 +977,15 @@ std::string BuildPairingUri(const TunnelRule& r, const std::string& default_secr
 }
 
 std::string BuildCliCommand(const TunnelRule& r, const std::string& default_secret) {
-    std::string secret = Trim(default_secret);
+    std::string secret = !Trim(r.secret).empty() ? Trim(r.secret) : Trim(default_secret);
     std::string proto = NormalizeProto(r.proto);
     int bw = r.bandwidth_mbps > 0 ? r.bandwidth_mbps : 100;
+    std::string tun_id = !Trim(r.name).empty() ? Trim(r.name) : Trim(r.id);
     std::string listen_ep = (r.mode == "expose")
                                 ? NormalizeEndpoint(SuggestConnectPort(r.port), "1080")
                                 : NormalizeEndpoint(r.port, "1080");
     std::ostringstream oss;
-    oss << "p2ptun connect " << r.name
+    oss << "p2ptun connect " << tun_id
         << " -secret " << secret
         << " -listen " << listen_ep
         << " -proto " << proto
@@ -1000,6 +1039,9 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
         r.mode = "connect";
         r.name = Trim(kv["name"]);
         if (r.name.empty()) {
+            r.name = Trim(kv["id"]);
+        }
+        if (r.name.empty()) {
             while (!path_part.empty() && path_part.front() == '/') path_part.erase(path_part.begin());
             while (!path_part.empty() && path_part.back() == '/') path_part.pop_back();
             if (ToLower(path_part) != "connect" && ToLower(path_part) != "pair") {
@@ -1007,10 +1049,10 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
             }
         }
         if (r.name.empty()) {
-            out_err = "p2ptun:// 配对码缺少隧道名称 (name)";
+            out_err = "p2ptun:// 配对码缺少隧道 ID (id/name)";
             return false;
         }
-        // 密钥统一由全局 default_secret 管理；配对码里的 secret 字段仅用于展示兼容，忽略
+        r.id = r.name;
         r.port = Trim(kv["port"]);
         if (r.port.empty()) r.port = "1080";
         r.proto = NormalizeProto(kv["proto"]);
@@ -1027,9 +1069,6 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
         r.nat1to1 = Trim(kv["nat1to1"]);
         r.force_relay = (kv["forcerelay"] == "1" || ToLower(kv["forcerelay"]) == "true");
         r.keep_proxy = (kv["keepproxy"] == "1" || ToLower(kv["keepproxy"]) == "true");
-        if (r.remark.empty()) {
-            r.remark = "导入连接 " + r.name;
-        }
         r.enabled = true;
         out_rule = NormalizeRule(r, "connect", r.proto, r.bandwidth_mbps);
         return true;
@@ -1056,7 +1095,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
                     if ((arg == "-id" || arg == "-peer" || arg == "-name" || arg == "--id" || arg == "--peer" || arg == "--name") && i + 1 < tokens.size()) {
                         r.name = tokens[++i];
                     } else if ((arg == "-secret" || arg == "--secret") && i + 1 < tokens.size()) {
-                        ++i; // 密钥统一走全局 default_secret，跳过
+                        ++i; // 密钥默认走全局 default_secret
                     } else if ((arg == "-target" || arg == "-listen" || arg == "--target" || arg == "--listen") && i + 1 < tokens.size()) {
                         r.port = tokens[++i];
                     } else if ((arg == "-proto" || arg == "-transport" || arg == "--proto") && i + 1 < tokens.size()) {
@@ -1094,10 +1133,10 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
                     }
                 }
                 if (r.name.empty()) {
-                    out_err = "命令行缺少隧道名称";
+                    out_err = "命令行缺少隧道 ID";
                     return false;
                 }
-                r.remark = "命令行导入 " + r.name;
+                r.id = r.name;
                 out_rule = NormalizeRule(r, mode, r.proto, r.bandwidth_mbps);
                 return true;
             }
@@ -1119,10 +1158,10 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
             if (!name.empty() && !secret.empty()) {
                 TunnelRule r;
                 r.mode = "connect";
+                r.id = name;
                 r.name = name;
-                (void)secret; // 密钥统一走全局 default_secret
+                (void)secret;
                 r.port = port_part;
-                r.remark = "快捷导入 " + name;
                 r.enabled = true;
                 out_rule = NormalizeRule(r, "connect", "hy2", 100);
                 return true;
@@ -1130,7 +1169,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
         }
     }
 
-    out_err = "无法识别配对码格式（支持 p2ptun:// 链接、p2ptun connect 命令、或 隧道名:密钥@端口）";
+    out_err = "无法识别配对码格式（支持 p2ptun:// 链接、p2ptun connect 命令、或 ID:密钥@端口）";
     return false;
 }
 
@@ -1138,12 +1177,18 @@ std::string EffectiveSecret(const AppConfig& global_cfg) {
     return Trim(global_cfg.default_secret);
 }
 
+std::string EffectiveSecret(const TunnelRule& rule, const AppConfig& global_cfg) {
+    std::string rs = Trim(rule.secret);
+    return !rs.empty() ? rs : Trim(global_cfg.default_secret);
+}
+
 std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppConfig& global_cfg, int status_port) {
     std::string mode = (ToLower(Trim(rule.mode)) == "connect") ? "connect" : "expose";
     std::string proto = NormalizeProto(rule.proto.empty() ? global_cfg.default_proto : rule.proto);
     int bw = rule.bandwidth_mbps > 0 ? rule.bandwidth_mbps : (global_cfg.default_bandwidth > 0 ? global_cfg.default_bandwidth : 100);
     std::string ep = NormalizeEndpoint(rule.port, mode == "connect" ? "13389" : "3389");
-    // 单规则留空的字段回退到全局 advanced 默认值 (rule 字段 = 覆盖层)
+    std::string tun_id = !Trim(rule.name).empty() ? Trim(rule.name) : Trim(rule.id);
+
     auto pick = [](const std::string& rule_val, const std::string& global_val) -> std::string {
         std::string rv = Trim(rule_val);
         return rv.empty() ? Trim(global_val) : rv;
@@ -1154,7 +1199,7 @@ std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppCo
 
     std::vector<std::string> args;
     args.push_back(mode);
-    args.push_back(rule.name);
+    args.push_back(tun_id);
     if (mode == "expose") {
         args.push_back("-target");
         args.push_back(ep);
@@ -1170,7 +1215,7 @@ std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppCo
     args.push_back("-bandwidth");
     args.push_back(std::to_string(bw));
 
-    // 高级穿透参数：单规则覆盖 > 全局默认 > p2ptun 内置默认 (上游 main.go flag 全集)
+    // 高级穿透参数：单规则覆盖 > 全局默认 > p2ptun 内置默认
     {
         std::string v;
         v = pick(rule.broker, global_cfg.adv_broker);
@@ -1194,13 +1239,10 @@ std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppCo
             args.push_back("-max-peers");
             args.push_back(std::to_string(eff_max_peers));
         }
-        if (mode == "connect") {
-            if (rule.on_demand) {
-                args.push_back("-on-demand");
-                if (!v.empty() && v != "10m") {
-                    args.push_back("-idle-timeout");
-                    args.push_back(v);
-                }
+        if (mode == "connect" && rule.on_demand) {
+            if (!v.empty() && v != "10m") {
+                args.push_back("-idle-timeout");
+                args.push_back(v);
             }
         }
         if (eff_force_relay) args.push_back("-force-relay");
