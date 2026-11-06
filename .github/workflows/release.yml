@@ -1,0 +1,78 @@
+name: Build and Release Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '可选：手动发布 Release 的版本号标签 (如 v1.0.0，留空则仅构建 Artifact)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-exe:
+    name: Build C++ Windows GUI EXE (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake (Release x64)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -A x64
+
+      - name: Build p2ptun-gui.exe and Unit Tests
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Run C++17 Core Unit Tests
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+
+      - name: Prepare Release Assets & Portable Bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/p2ptun-win-x64 | Out-Null
+          Copy-Item build/Release/p2ptun-gui.exe dist/p2ptun-gui.exe
+          Copy-Item build/Release/p2ptun-gui.exe dist/p2ptun-win-x64/p2ptun-gui.exe
+          Copy-Item config.example.json dist/p2ptun-win-x64/config.json
+          Copy-Item config.example.json dist/p2ptun-win-x64/config.example.json
+          Copy-Item README.md dist/p2ptun-win-x64/README.md
+          Copy-Item LICENSE dist/p2ptun-win-x64/LICENSE
+          Compress-Archive -Path dist/p2ptun-win-x64/* -DestinationPath dist/p2ptun-win-x64-portable.zip -Force
+          Get-ChildItem dist
+
+      - name: Upload Build Artifacts (Available on every commit/PR)
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2ptun-gui-windows-x64
+          path: |
+            dist/p2ptun-gui.exe
+            dist/p2ptun-win-x64-portable.zip
+
+      - name: Publish GitHub Release (on Tag v* or Manual Dispatch with tag_name)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name != '')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name != '' && github.event.inputs.tag_name || github.ref_name }}
+          name: "p2ptun Windows GUI ${{ github.event.inputs.tag_name != '' && github.event.inputs.tag_name || github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            dist/p2ptun-gui.exe
+            dist/p2ptun-win-x64-portable.zip
+            config.example.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

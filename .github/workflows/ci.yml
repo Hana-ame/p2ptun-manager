@@ -1,0 +1,46 @@
+name: CI Build & Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  core-tests-linux:
+    name: C++17 Core Unit Tests (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build & Run Core Unit Tests (g++, headless)
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -pthread \
+            src/core.cpp src/process_manager_win32.cpp tests/test_core.cpp \
+            -o build_test_core
+          ./build_test_core
+
+  build-windows-exe:
+    name: C++17 Win32 GUI Build (MSVC x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake (Release x64)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -A x64
+
+      - name: Build p2ptun-gui.exe and Unit Tests
+        run: cmake --build build --config Release --parallel
+
+      - name: Run C++17 Core Unit Tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Upload GUI EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2ptun-gui-ci-build
+          path: |
+            build/Release/p2ptun-gui.exe

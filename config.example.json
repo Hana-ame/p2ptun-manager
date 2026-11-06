@@ -1,0 +1,77 @@
+{
+  "p2ptun_path": "p2ptun.exe",
+  "default_secret": "my-secret-123456",
+  "default_proto": "hy2",
+  "default_bandwidth": 100,
+  "minimize_to_tray": true,
+  "expose": [
+    {
+      "id": "expose-rdp",
+      "remark": "本机远程桌面 (RDP)",
+      "name": "home-rdp",
+      "port": "3389",
+      "proto": "hy2",
+      "bandwidth_mbps": 100,
+      "enabled": false
+    },
+    {
+      "id": "expose-ssh",
+      "remark": "本机 SSH / WSL2",
+      "name": "home-ssh",
+      "port": "22",
+      "proto": "hy2",
+      "bandwidth_mbps": 100,
+      "enabled": false
+    },
+    {
+      "id": "expose-web",
+      "remark": "本机 Web 服务",
+      "name": "home-web",
+      "port": "8080",
+      "proto": "hy2",
+      "bandwidth_mbps": 100,
+      "enabled": false
+    },
+    {
+      "id": "expose-serial",
+      "remark": "工控机串口透传 (COM3)",
+      "name": "plc-serial",
+      "port": "9103",
+      "serial_port": "COM3",
+      "serial_baud": 115200,
+      "serial_params": "8N1",
+      "enabled": false
+    }
+  ],
+  "connect": [
+    {
+      "id": "connect-rdp",
+      "remark": "连接家里远程桌面 (本地13389)",
+      "name": "home-rdp",
+      "port": "13389",
+      "proto": "hy2",
+      "bandwidth_mbps": 100,
+      "enabled": false
+    },
+    {
+      "id": "connect-proxy",
+      "remark": "连接远端代理端口 (本地1080)",
+      "name": "office-proxy",
+      "port": "1080",
+      "proto": "hy2",
+      "bandwidth_mbps": 100,
+      "enabled": false
+    },
+    {
+      "id": "connect-rdp-adv",
+      "remark": "按需连接 + 心跳/端口范围调优",
+      "name": "home-rdp",
+      "port": "13389",
+      "keepalive": "15s",
+      "ice_ports": "40000-40100",
+      "on_demand": true,
+      "idle_timeout": "30m",
+      "enabled": false
+    }
+  ]
+}
