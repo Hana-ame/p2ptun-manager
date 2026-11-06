@@ -798,7 +798,7 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
                     else if (key == "ice_ports" || key == "ice-ports") r.ice_ports = val;
                     else if (key == "nat1to1" || key == "nat1t") r.nat1to1 = val;
                     else if (key == "idle_timeout" || key == "idle-timeout") r.idle_timeout = val;
-                    else if (key == "max_peers" || key == "max-peers") r.max_peers = std::max(0, std::atoi(val.c_str()));
+                    else if (key == "max_peers" || key == "max-peers") r.max_peers = (std::max)(0, std::atoi(val.c_str()));
                     else if (key == "force_relay" || key == "force-relay") r.force_relay = (val == "1" || p2ptun::ToLower(val) == "true");
                     else if (key == "keep_proxy" || key == "keep-proxy") r.keep_proxy = (val == "1" || p2ptun::ToLower(val) == "true");
                 }
