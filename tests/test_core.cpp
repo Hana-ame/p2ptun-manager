@@ -18,6 +18,20 @@ int main() {
     assert(SuggestConnectPort("127.0.0.1:3389") == "13389");
     assert(SuggestConnectPort("127.0.0.1:22") == "2222");
     assert(SuggestConnectPort("127.0.0.1:1080") == "1080");
+    // Tab 切换端口反转: Server <-> Client 互为逆映射
+    assert(SuggestExposePort("127.0.0.1:13389") == "3389");
+    assert(SuggestExposePort("127.0.0.1:2222") == "22");
+    assert(SuggestExposePort("127.0.0.1:17890") == "7890");
+    const char* flip_pairs[][2] = {
+        {"3389", "13389"}, {"22", "2222"}, {"80", "18080"}, {"443", "18443"},
+        {"445", "10445"}, {"3306", "13306"}, {"5432", "15432"}, {"7890", "17890"},
+    };
+    for (auto& pr : flip_pairs) {
+        std::string expose_ep = std::string("127.0.0.1:") + pr[0];
+        std::string flipped = SuggestConnectPort(expose_ep);
+        assert(flipped == pr[1]);
+        assert(SuggestExposePort("127.0.0.1:" + flipped) == pr[0]); // 来回翻转还原
+    }
 
     // 2. 测试一键配对码 (p2ptun://) 生成与解析
     TunnelRule expRule;
@@ -38,7 +52,6 @@ int main() {
     assert(ok);
     assert(parsedFromUri.mode == "connect");
     assert(parsedFromUri.name == "home-rdp");
-    assert(parsedFromUri.secret == "MySecret888");
     assert(parsedFromUri.port == "127.0.0.1:13389");
     assert(parsedFromUri.proto == "hy2");
     assert(parsedFromUri.bandwidth_mbps == 100);
@@ -52,7 +65,6 @@ int main() {
     assert(ok);
     assert(parsedFromCli.mode == "connect");
     assert(parsedFromCli.name == "home-rdp");
-    assert(parsedFromCli.secret == "MySecret888");
     assert(parsedFromCli.port == "127.0.0.1:13389");
 
     // 4. 测试极简口令导入 (name:secret@port)
@@ -61,7 +73,6 @@ int main() {
     assert(ok);
     assert(parsedShort.mode == "connect");
     assert(parsedShort.name == "office-ssh");
-    assert(parsedShort.secret == "hunter2");
     assert(parsedShort.port == "127.0.0.1:2222");
 
     // 5. 测试多端口配置文件序列化与反序列化 (含注释与纯数字端口)
@@ -87,16 +98,19 @@ int main() {
         return 1;
     }
     assert(cfg.default_secret == "global-pass-999");
-    assert(cfg.expose.size() == 2);
-    assert(cfg.connect.size() == 2);
-    assert(cfg.expose[0].port == "127.0.0.1:3389");
-    assert(cfg.expose[1].port == "127.0.0.1:22");
-    assert(cfg.connect[0].port == "127.0.0.1:13389");
-    assert(EffectiveSecret(cfg.connect[0], cfg) == "global-pass-999");
-    assert(EffectiveSecret(cfg.connect[1], cfg) == "override-sec");
+    // 旧 expose/connect 双列表自动迁移为统一 tunnels (角色记入 last_role)
+    assert(cfg.tunnels.size() == 4);
+    assert(cfg.expose.empty());
+    assert(cfg.connect.empty());
+    assert(cfg.tunnels[0].port == "127.0.0.1:3389");
+    assert(cfg.tunnels[0].last_role == "expose");
+    assert(cfg.tunnels[1].port == "127.0.0.1:22");
+    assert(cfg.tunnels[2].port == "127.0.0.1:13389");
+    assert(cfg.tunnels[2].last_role == "connect");
+    assert(EffectiveSecret(cfg) == cfg.default_secret); // 密钥统一走全局默认
 
     // 验证子进程命令行参数绝不包含明文密钥
-    auto subArgs = BuildSubprocessArgs(cfg.expose[0], cfg, 18301);
+    auto subArgs = BuildSubprocessArgs(cfg.tunnels[0], cfg, 18301);
     for (const auto& a : subArgs) {
         assert(a != "-secret");
         assert(a != "global-pass-999");
@@ -133,15 +147,8 @@ int main() {
     assert(snap.udp_endpoint == "183.193.27.110:1570");
     assert(FormatBytes(snap.bytes_tx) == "10.0 MB");
 
-    // 6.5 串口参数解析与全量 flag 构造 (新增合并能力)
+    // 6.5 全量 flag 构造与全局高级默认值回退 (合并能力)
     {
-        int db = 0; char par = 0; int sb = 0;
-        assert(p2ptun::ParseSerialParams("8N1", db, par, sb)); assert(db == 8 && par == 'N' && sb == 1);
-        assert(p2ptun::ParseSerialParams("7E2", db, par, sb)); assert(db == 7 && par == 'E' && sb == 2);
-        assert(p2ptun::ParseSerialParams("8O1", db, par, sb)); assert(par == 'O');
-        assert(!p2ptun::ParseSerialParams("9X3", db, par, sb));
-        assert(!p2ptun::ParseSerialParams("", db, par, sb));
-
         p2ptun::TunnelRule ex;
         ex.mode = "expose";
         ex.name = "flag-rule";
@@ -169,6 +176,32 @@ int main() {
         assert(contains("-status-addr")); assert(contains("127.0.0.1:18400"));
         for (const auto& a : args2) assert(a != "global-pass-999");
 
+        // 全局 advanced 默认值回退：单规则留空时透传全局值；规则覆盖优先
+        p2ptun::AppConfig g2;
+        g2.adv_keepalive = "20s";
+        g2.adv_broker = "wss://global-broker.example.com";
+        g2.adv_max_peers = 8;
+        p2ptun::TunnelRule blank; // 全留空
+        blank.mode = "expose";
+        blank.name = "blank-rule";
+        blank.port = "8080";
+        blank = p2ptun::NormalizeRule(blank, "expose", "hy2", 100);
+        auto args4 = p2ptun::BuildSubprocessArgs(blank, g2, 18500);
+        auto has4 = [&args4](const std::string& v) {
+            for (const auto& a : args4) if (a == v) return true;
+            return false;
+        };
+        assert(has4("-keepalive")); assert(has4("20s"));          // 全局默认生效
+        assert(has4("-broker")); assert(has4("wss://global-broker.example.com"));
+        assert(has4("-max-peers")); assert(has4("8"));
+        auto args5 = p2ptun::BuildSubprocessArgs(ex, g2, 18501); // ex 已有 broker/stun 覆盖
+        auto has5 = [&args5](const std::string& v) {
+            for (const auto& a : args5) if (a == v) return true;
+            return false;
+        };
+        assert(has5("-broker") && has5("wss://b.example.com"));   // 规则覆盖优先
+        assert(has5("-keepalive") && has5("20s"));              // 规则未覆盖 → 全局默认
+
         p2ptun::TunnelRule cn;
         cn.mode = "connect";
         cn.name = "flag-rule-c";
@@ -195,18 +228,18 @@ int main() {
     {
         MultiTunnelManager mgr(tmpCfgPath);
         auto initialRows = mgr.GetRowViews();
-        assert(initialRows.size() == 4); // 默认 2 条 expose + 2 条 connect
+        assert(initialRows.size() == 3); // 默认 3 条统一隧道配置
 
         std::string newId, mgrErr;
         assert(mgr.ImportFromPairingCode("my-nas:naspass123@5000", newId, mgrErr));
         auto afterImport = mgr.GetRowViews();
-        assert(afterImport.size() == 5);
+        assert(afterImport.size() == 4);
 
         // 注意: 不在此处调用 ToggleTunnel/StartTunnel —— 启动会拉起真实子进程,
         // CI 环境没有 p2ptun.exe 会以错误弹窗路径失败。仅验证规则增删与序列化往返。
         // (启动生命周期由 Windows 上的 smoke 流程与人工验收覆盖)
         assert(mgr.DeleteRule(newId, mgrErr));
-        assert(mgr.GetRowViews().size() == 4);
+        assert(mgr.GetRowViews().size() == 3);
 
         // 高级参数序列化往返 (新增合并能力验证)
         p2ptun::TunnelRule adv;
@@ -227,9 +260,6 @@ int main() {
         adv.force_relay = true;
         adv.keep_proxy = true;
         adv.auto_restart = false;
-        adv.serial_port = "COM3";
-        adv.serial_baud = 9600;
-        adv.serial_params = "7E2";
         std::string outId2;
         assert(mgr.AddOrUpdateRule(adv, false, outId2, mgrErr));
 
@@ -237,7 +267,7 @@ int main() {
         std::string loadErr;
         assert(p2ptun::LoadAppConfigFromFile(mgr.ConfigPath(), reloaded, loadErr));
         bool found = false;
-        for (const auto& r : reloaded.expose) {
+        for (const auto& r : reloaded.tunnels) {
             if (r.id == outId2) {
                 found = true;
                 assert(r.broker == adv.broker);
@@ -253,9 +283,6 @@ int main() {
                 assert(r.force_relay == true);
                 assert(r.keep_proxy == true);
                 assert(r.auto_restart == false);
-                assert(r.serial_port == "COM3");
-                assert(r.serial_baud == 9600);
-                assert(r.serial_params == "7E2");
             }
         }
         assert(found);

@@ -10,11 +10,11 @@ namespace p2ptun {
 // 设计原则：极致傻瓜化。用户只需关心 name (隧道名) + port (本地端口)，其余自动补全或继承全局配置。
 struct TunnelRule {
     std::string id;                 // 规则唯一标识 (为空时自动生成)
-    std::string mode = "expose";    // "expose" 或 "connect"
+    std::string mode = "expose";    // 当前运行角色: "expose" (Server) 或 "connect" (Client)
+    std::string last_role = "";     // 上次启动成功的角色 (持久化，重启后恢复；空=从未运行)
     std::string remark;             // 备注说明，如 "家里远程桌面 RDP"
     std::string name;               // 隧道名称 (Expose 与 Connect 填相同的名字即可配对)
     std::string port;               // 端口或地址，支持直接填 "3389"、":3389" 或 "127.0.0.1:3389"
-    std::string secret;             // 独立配对密钥 (留空则自动使用全局 default_secret)
     std::string proto = "hy2";      // 传输协议: "hy2" (默认极速 Brutal CC), "quic", "classic"
     int bandwidth_mbps = 100;       // Hysteria 2 Brutal CC 带宽上限 (Mbps)
     bool on_demand = false;         // Connect 按需连接模式
@@ -33,14 +33,7 @@ struct TunnelRule {
     bool keep_proxy = false;        // -keep-proxy 保留系统环境代理供信令使用
     bool force_relay = false;       // -force-relay 强制 TURN 中继模式
     int max_peers = 0;              // -max-peers Expose 最大并发客户端 (0 = p2ptun 默认 16)
-    bool auto_restart = true;      // 进程异常退出时守护重启 (合并自 C# 管理器)
-
-    // ---- 内置 COM 串口 <-> TCP 双向透传桥接 (合并自 C# SerialTcpBridge，仅 Windows 生效) ----
-    // Expose 模式: 管理器在 rule.port 监听 TCP 并桥接至本地串口，p2ptun 以 -target rule.port 暴露该桥接端口
-    // Connect 模式: 管理器作为 TCP 客户端连入本地 p2ptun 监听端口 (rule.port) 并桥接至本地串口
-    std::string serial_port;        // 串口号 (如 "COM3"；留空 = 不启用串口桥接)
-    int serial_baud = 115200;       // 波特率
-    std::string serial_params = "8N1"; // 数据位/校验/停止位，如 "8N1"、"7E2"、"8O1"
+    bool auto_restart = true;      // 进程异常退出时守护重启
 };
 
 // 全局配置文件结构 (对应 exe 同级目录的 config.json)
@@ -50,12 +43,25 @@ struct AppConfig {
     std::string default_proto = "hy2";
     int default_bandwidth = 100;
     bool minimize_to_tray = true;           // 点击关闭按钮时最小化到系统托盘
-    std::vector<TunnelRule> expose;         // 暴露本机端口列表
-    std::vector<TunnelRule> connect;        // 连接远端端口列表
+    std::vector<TunnelRule> expose;         // 兼容旧格式: Server 角色规则
+    std::vector<TunnelRule> connect;        // 兼容旧格式: Client 角色规则
+    std::vector<TunnelRule> tunnels;        // 新格式: 角色无关的统一隧道配置 (运行时自选 expose/connect)
+
+    // ---- 全局高级参数默认值 (单规则同名字段留空时生效) ----
+    std::string adv_broker;                // -broker
+    std::string adv_stun;                  // -stun
+    std::string adv_turn;                   // -turn
+    std::string adv_proxy;                 // -proxy
+    std::string adv_peer_key;              // -key
+    std::string adv_keepalive;             // -keepalive
+    std::string adv_ice_ports;             // -ice-ports
+    std::string adv_nat1to1;               // -nat1to1
+    std::string adv_idle_timeout;          // -idle-timeout
+    int adv_max_peers = 0;                 // -max-peers (0 = p2ptun 默认 16)
+    bool adv_force_relay = false;          // -force-relay
+    bool adv_keep_proxy = false;           // -keep-proxy
 };
 
-// 串口桥接辅助：解析 "8N1" 风格串口参数 (返回 false 表示格式非法)
-bool ParseSerialParams(const std::string& params, int& out_databits, char& out_parity, int& out_stopbits);
 
 // 对应 p2ptun `GET /status` 返回的运行期状态快照
 struct StatusSnapshot {
@@ -108,6 +114,9 @@ std::string ExtractPortOnly(const std::string& endpoint);
 // 当复制 Expose 规则给另一台 Windows 电脑 Connect 时，自动避开系统保留端口 (如 3389 -> 13389, 22 -> 2222)
 std::string SuggestConnectPort(const std::string& expose_endpoint);
 
+// SuggestConnectPort 的反向映射 (Client -> Server 切换时把 13389 还原回 3389)
+std::string SuggestExposePort(const std::string& connect_endpoint);
+
 // 规范化单条规则与整体配置
 TunnelRule NormalizeRule(TunnelRule rule, const std::string& forced_mode, const std::string& def_proto, int def_bw);
 void NormalizeAppConfig(AppConfig& cfg);
@@ -129,7 +138,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
 
 // 构造启动子进程 p2ptun.exe 所需的命令行参数列表 (不含明文密钥，密钥通过 P2PTUN_SECRET 环境变量注入)
 std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppConfig& global_cfg, int status_port);
-std::string EffectiveSecret(const TunnelRule& rule, const AppConfig& global_cfg);
+std::string EffectiveSecret(const AppConfig& global_cfg);
 
 // 流量字节数可读格式化 (如 "12.5 MB", "850.0 KB/s")
 std::string FormatBytes(uint64_t bytes);

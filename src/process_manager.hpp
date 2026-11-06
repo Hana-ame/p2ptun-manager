@@ -30,39 +30,6 @@ private:
     std::atomic<uint64_t> seq_{0};
 };
 
-// COM 串口 <-> TCP 双向透传桥接器 (合并自 C# SerialTcpBridge，Win32 原生零依赖实现)
-// Expose 模式: 在 rule.port 监听 TCP，接受来自 p2ptun (-target 指向此端口) 的连接并桥接至本地串口
-// Connect 模式: 主动连入本地 p2ptun 监听端口 (rule.port)，把远端串口数据桥接至本地串口
-class SerialTcpBridge {
-public:
-    SerialTcpBridge(const TunnelRule& rule, LogBuffer& logs);
-    ~SerialTcpBridge();
-
-    SerialTcpBridge(const SerialTcpBridge&) = delete;
-    SerialTcpBridge& operator=(const SerialTcpBridge&) = delete;
-
-    bool Start(std::string& out_err);   // 打开串口并按模式启动桥接线程
-    void Stop();
-
-    static bool ComPortExists(const std::string& com_name);
-
-private:
-    void ServerLoop(std::string host, int port);
-    void ClientLoop(std::string host, int port);
-    void PumpBidirectional(void* sock_handle);
-    bool OpenComPort(std::string& out_err);
-    void CloseComPort();
-    int ReadCom(char* buf, int len);
-    bool WriteCom(const char* buf, int len);
-
-    TunnelRule rule_;
-    LogBuffer& logs_;
-    void* com_handle_ = nullptr;      // HANDLE
-    void* listen_sock_ = nullptr;     // SOCKET (server mode)
-    std::atomic<bool> stopping_{false};
-    std::thread pump_thread_;
-};
-
 // GUI 列表单行展示快照
 struct TunnelRowView {
     int index = 0;
@@ -107,6 +74,12 @@ public:
     // 重新从磁盘加载 config.json
     bool ReloadConfigFromDisk(std::string& out_err);
 
+    // 更新全局高级参数默认值并持久化 (GUI ①区 "高级默认" 框)
+    bool UpdateAdvancedDefaults(const AppConfig& advanced_part, std::string& out_err);
+
+    // 批量导出完整 config.json (全局设置 + 全部规则)
+    bool ExportConfig(const std::string& target_path, std::string& out_err) const;
+
     // 隧道规则增删改
     bool AddOrUpdateRule(const TunnelRule& rule, bool auto_start, std::string& out_id, std::string& out_err);
     bool DeleteRule(const std::string& id, std::string& out_err);
@@ -142,7 +115,6 @@ private:
         std::thread log_thread;
         std::string last_start_error;
         StatusSnapshot last_snap;
-        std::shared_ptr<SerialTcpBridge> serial_bridge; // 串口桥接 (可选)
         int watchdog_restarts = 0;                     // 看门狗守护重启计数 (auto_restart)
         uint64_t prev_tx = 0;
         uint64_t prev_rx = 0;

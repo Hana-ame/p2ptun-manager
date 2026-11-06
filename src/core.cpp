@@ -393,6 +393,7 @@ TunnelRule RuleFromJsonValue(const JsonValue& v, const std::string& forced_mode,
     TunnelRule r;
     r.id = v.GetString("id");
     r.mode = v.GetString("mode", forced_mode);
+    r.last_role = v.GetString("last_role");
     r.remark = v.GetString("remark");
     r.name = v.GetString("name");
     if (r.name.empty()) {
@@ -404,7 +405,6 @@ TunnelRule RuleFromJsonValue(const JsonValue& v, const std::string& forced_mode,
         std::string listen = v.GetString("listen");
         r.port = !target.empty() ? target : listen;
     }
-    r.secret = v.GetString("secret");
     r.proto = v.GetString("proto", def_proto);
     r.bandwidth_mbps = static_cast<int>(v.GetInt64("bandwidth_mbps", v.GetInt64("bandwidth", def_bw)));
     r.on_demand = v.GetBool("on_demand", false);
@@ -423,9 +423,6 @@ TunnelRule RuleFromJsonValue(const JsonValue& v, const std::string& forced_mode,
     r.force_relay = v.GetBool("force_relay", false);
     r.max_peers = static_cast<int>(v.GetInt64("max_peers", 0));
     r.auto_restart = v.GetBool("auto_restart", true);
-    r.serial_port = v.GetString("serial_port");
-    r.serial_baud = static_cast<int>(v.GetInt64("serial_baud", v.GetInt64("baud", 115200)));
-    r.serial_params = v.GetString("serial_params", "8N1");
     return NormalizeRule(r, forced_mode, def_proto, def_bw);
 }
 
@@ -434,12 +431,12 @@ void WriteRuleJson(std::ostringstream& oss, const TunnelRule& r, int indent) {
     std::string pad2(indent + 2, ' ');
     oss << pad << "{\n";
     oss << pad2 << "\"id\": \"" << JsonEscape(r.id) << "\",\n";
+    if (!Trim(r.last_role).empty()) {
+        oss << pad2 << "\"last_role\": \"" << JsonEscape(Trim(r.last_role)) << "\",\n";
+    }
     oss << pad2 << "\"remark\": \"" << JsonEscape(r.remark) << "\",\n";
     oss << pad2 << "\"name\": \"" << JsonEscape(r.name) << "\",\n";
     oss << pad2 << "\"port\": \"" << JsonEscape(r.port) << "\",\n";
-    if (!r.secret.empty()) {
-        oss << pad2 << "\"secret\": \"" << JsonEscape(r.secret) << "\",\n";
-    }
     oss << pad2 << "\"proto\": \"" << JsonEscape(NormalizeProto(r.proto)) << "\",\n";
     oss << pad2 << "\"bandwidth_mbps\": " << (r.bandwidth_mbps > 0 ? r.bandwidth_mbps : 100) << ",\n";
     if (r.mode == "connect" && r.on_demand) {
@@ -458,11 +455,6 @@ void WriteRuleJson(std::ostringstream& oss, const TunnelRule& r, int indent) {
     if (r.force_relay)              oss << pad2 << "\"force_relay\": true,\n";
     if (r.max_peers > 0)            oss << pad2 << "\"max_peers\": " << r.max_peers << ",\n";
     if (!r.auto_restart)            oss << pad2 << "\"auto_restart\": false,\n";
-    if (!Trim(r.serial_port).empty()) {
-        oss << pad2 << "\"serial_port\": \"" << JsonEscape(r.serial_port) << "\",\n";
-        oss << pad2 << "\"serial_baud\": " << (r.serial_baud > 0 ? r.serial_baud : 115200) << ",\n";
-        oss << pad2 << "\"serial_params\": \"" << JsonEscape(Trim(r.serial_params).empty() ? "8N1" : r.serial_params) << "\",\n";
-    }
     oss << pad2 << "\"enabled\": " << (r.enabled ? "true" : "false") << "\n";
     oss << pad << "}";
 }
@@ -554,7 +546,21 @@ std::string SuggestConnectPort(const std::string& expose_endpoint) {
     if (p == "445") return "10445";
     if (p == "3306") return "13306";
     if (p == "5432") return "15432";
+    if (p == "7890") return "17890";
     return p.empty() ? "1080" : p;
+}
+
+std::string SuggestExposePort(const std::string& connect_endpoint) {
+    std::string p = ExtractPortOnly(connect_endpoint);
+    if (p == "13389") return "3389";
+    if (p == "2222") return "22";
+    if (p == "18080") return "80";
+    if (p == "18443") return "443";
+    if (p == "10445") return "445";
+    if (p == "13306") return "3306";
+    if (p == "15432") return "5432";
+    if (p == "17890") return "7890";
+    return p.empty() ? "3389" : p;
 }
 
 TunnelRule NormalizeRule(TunnelRule r, const std::string& forced_mode, const std::string& def_proto, int def_bw) {
@@ -575,7 +581,6 @@ TunnelRule NormalizeRule(TunnelRule r, const std::string& forced_mode, const std
     }
     std::string def_port = (r.mode == "connect") ? "13389" : "3389";
     r.port = NormalizeEndpoint(r.port, def_port);
-    r.secret = Trim(r.secret);
     r.proto = NormalizeProto(r.proto.empty() ? def_proto : r.proto);
     if (r.bandwidth_mbps <= 0) {
         r.bandwidth_mbps = (def_bw > 0) ? def_bw : 100;
@@ -598,18 +603,6 @@ TunnelRule NormalizeRule(TunnelRule r, const std::string& forced_mode, const std
     if (r.max_peers < 0 || r.max_peers > 1024) {
         r.max_peers = 0;
     }
-    if (r.serial_baud <= 0) {
-        r.serial_baud = 115200;
-    }
-    r.serial_port = Trim(r.serial_port);
-    r.serial_params = Trim(r.serial_params);
-    if (r.serial_params.empty()) {
-        r.serial_params = "8N1";
-    }
-    int db = 8; char parity = 'N'; int sb = 1;
-    if (!ParseSerialParams(r.serial_params, db, parity, sb)) {
-        r.serial_params = "8N1"; // 非法格式回退默认
-    }
     return r;
 }
 
@@ -626,11 +619,24 @@ void NormalizeAppConfig(AppConfig& cfg) {
     if (cfg.default_bandwidth <= 0) {
         cfg.default_bandwidth = 100;
     }
-    for (auto& r : cfg.expose) {
-        r = NormalizeRule(r, "expose", cfg.default_proto, cfg.default_bandwidth);
-    }
-    for (auto& r : cfg.connect) {
-        r = NormalizeRule(r, "connect", cfg.default_proto, cfg.default_bandwidth);
+    // 统一 tunnels 优先；仅当无 tunnels 时才用旧双列表（迁移在 Parse 层完成）
+    if (!cfg.tunnels.empty()) {
+        cfg.expose.clear();
+        cfg.connect.clear();
+        for (auto& r : cfg.tunnels) {
+            std::string forced = r.mode.empty() ? "expose" : r.mode;
+            r = NormalizeRule(r, forced, cfg.default_proto, cfg.default_bandwidth);
+            if (Trim(r.last_role).empty()) r.last_role = r.mode;
+        }
+    } else {
+        for (auto& r : cfg.expose) {
+            r = NormalizeRule(r, "expose", cfg.default_proto, cfg.default_bandwidth);
+            r.last_role = "expose";
+        }
+        for (auto& r : cfg.connect) {
+            r = NormalizeRule(r, "connect", cfg.default_proto, cfg.default_bandwidth);
+            r.last_role = "connect";
+        }
     }
 }
 
@@ -642,48 +648,40 @@ AppConfig CreateDefaultAppConfig() {
     cfg.default_bandwidth = 100;
     cfg.minimize_to_tray = true;
 
-    TunnelRule exp_rdp;
-    exp_rdp.id = "expose-rdp-default";
-    exp_rdp.mode = "expose";
-    exp_rdp.remark = "本机远程桌面 (RDP)";
-    exp_rdp.name = "my-win-rdp";
-    exp_rdp.port = "127.0.0.1:3389";
-    exp_rdp.proto = "hy2";
-    exp_rdp.bandwidth_mbps = 100;
-    exp_rdp.enabled = false;
+    TunnelRule rdp;
+    rdp.id = "tunnel-rdp";
+    rdp.remark = "远程桌面 (RDP)";
+    rdp.name = "my-rdp";
+    rdp.port = "127.0.0.1:3389";
+    rdp.proto = "hy2";
+    rdp.bandwidth_mbps = 100;
+    rdp.mode = "expose";
+    rdp.last_role = "expose";
+    rdp.enabled = false;
 
-    TunnelRule exp_ssh;
-    exp_ssh.id = "expose-ssh-default";
-    exp_ssh.mode = "expose";
-    exp_ssh.remark = "本机 SSH / WSL2";
-    exp_ssh.name = "my-win-ssh";
-    exp_ssh.port = "127.0.0.1:22";
-    exp_ssh.proto = "hy2";
-    exp_ssh.bandwidth_mbps = 100;
-    exp_ssh.enabled = false;
+    TunnelRule ssh;
+    ssh.id = "tunnel-ssh";
+    ssh.remark = "SSH / WSL2";
+    ssh.name = "my-ssh";
+    ssh.port = "127.0.0.1:22";
+    ssh.proto = "hy2";
+    ssh.bandwidth_mbps = 100;
+    ssh.mode = "expose";
+    ssh.last_role = "expose";
+    ssh.enabled = false;
 
-    TunnelRule conn_rdp;
-    conn_rdp.id = "connect-rdp-default";
-    conn_rdp.mode = "connect";
-    conn_rdp.remark = "连接远端桌面 (本地13389)";
-    conn_rdp.name = "my-win-rdp";
-    conn_rdp.port = "127.0.0.1:13389";
-    conn_rdp.proto = "hy2";
-    conn_rdp.bandwidth_mbps = 100;
-    conn_rdp.enabled = false;
+    TunnelRule proxy;
+    proxy.id = "tunnel-proxy";
+    proxy.remark = "代理 (SOCKS5/HTTP)";
+    proxy.name = "my-proxy";
+    proxy.port = "127.0.0.1:1080";
+    proxy.proto = "hy2";
+    proxy.bandwidth_mbps = 100;
+    proxy.mode = "expose";
+    proxy.last_role = "expose";
+    proxy.enabled = false;
 
-    TunnelRule conn_proxy;
-    conn_proxy.id = "connect-proxy-default";
-    conn_proxy.mode = "connect";
-    conn_proxy.remark = "连接远端代理 (本地1080)";
-    conn_proxy.name = "my-proxy";
-    conn_proxy.port = "127.0.0.1:1080";
-    conn_proxy.proto = "hy2";
-    conn_proxy.bandwidth_mbps = 100;
-    conn_proxy.enabled = false;
-
-    cfg.expose = {exp_rdp, exp_ssh};
-    cfg.connect = {conn_rdp, conn_proxy};
+    cfg.tunnels = {rdp, ssh, proxy};
     return cfg;
 }
 
@@ -699,23 +697,53 @@ std::string SerializeAppConfigToJson(const AppConfig& input_cfg) {
     oss << "  \"default_bandwidth\": " << cfg.default_bandwidth << ",\n";
     oss << "  \"minimize_to_tray\": " << (cfg.minimize_to_tray ? "true" : "false") << ",\n";
 
-    oss << "  \"expose\": [";
-    if (!cfg.expose.empty()) oss << "\n";
-    for (size_t i = 0; i < cfg.expose.size(); ++i) {
-        WriteRuleJson(oss, cfg.expose[i], 4);
-        if (i + 1 < cfg.expose.size()) oss << ",";
+    if (!cfg.adv_broker.empty() || !cfg.adv_stun.empty() || !cfg.adv_turn.empty() ||
+        !cfg.adv_proxy.empty() || !cfg.adv_peer_key.empty() || !cfg.adv_keepalive.empty() ||
+        !cfg.adv_ice_ports.empty() || !cfg.adv_nat1to1.empty() || !cfg.adv_idle_timeout.empty() ||
+        cfg.adv_max_peers > 0 || cfg.adv_force_relay || cfg.adv_keep_proxy) {
+        oss << "  \"advanced\": {\n";
+        bool wrote = false;
+        auto adv_kv = [&](const char* k, const std::string& v) {
+            if (v.empty()) return;
+            if (wrote) oss << ",\n";
+            oss << "    \"" << k << "\": \"" << JsonEscape(v) << "\"";
+            wrote = true;
+        };
+        adv_kv("broker", Trim(cfg.adv_broker));
+        adv_kv("stun", Trim(cfg.adv_stun));
+        adv_kv("turn", Trim(cfg.adv_turn));
+        adv_kv("proxy", Trim(cfg.adv_proxy));
+        adv_kv("key", Trim(cfg.adv_peer_key));
+        adv_kv("keepalive", Trim(cfg.adv_keepalive));
+        adv_kv("ice_ports", Trim(cfg.adv_ice_ports));
+        adv_kv("nat1to1", Trim(cfg.adv_nat1to1));
+        adv_kv("idle_timeout", Trim(cfg.adv_idle_timeout));
+        if (cfg.adv_max_peers > 0) {
+            if (wrote) oss << ",\n";
+            oss << "    \"max_peers\": " << cfg.adv_max_peers;
+            wrote = true;
+        }
+        if (cfg.adv_force_relay) {
+            if (wrote) oss << ",\n";
+            oss << "    \"force_relay\": true";
+            wrote = true;
+        }
+        if (cfg.adv_keep_proxy) {
+            if (wrote) oss << ",\n";
+            oss << "    \"keep_proxy\": true";
+            wrote = true;
+        }
+        oss << "\n  },\n";
+    }
+    // 新格式: 单一 tunnels 数组 (每条自带 mode=上次角色；运行时可自选角色)
+    oss << "  \"tunnels\": [";
+    if (!cfg.tunnels.empty()) oss << "\n";
+    for (size_t i = 0; i < cfg.tunnels.size(); ++i) {
+        WriteRuleJson(oss, cfg.tunnels[i], 4);
+        if (i + 1 < cfg.tunnels.size()) oss << ",";
         oss << "\n";
     }
-    oss << (cfg.expose.empty() ? "],\n" : "  ],\n");
-
-    oss << "  \"connect\": [";
-    if (!cfg.connect.empty()) oss << "\n";
-    for (size_t i = 0; i < cfg.connect.size(); ++i) {
-        WriteRuleJson(oss, cfg.connect[i], 4);
-        if (i + 1 < cfg.connect.size()) oss << ",";
-        oss << "\n";
-    }
-    oss << (cfg.connect.empty() ? "]\n" : "  ]\n");
+    oss << (cfg.tunnels.empty() ? "]\n" : "  ]\n");
     oss << "}\n";
     return oss.str();
 }
@@ -737,6 +765,35 @@ bool ParseAppConfigFromJson(const std::string& json_text, AppConfig& out_cfg, st
     cfg.default_proto = NormalizeProto(root.GetString("default_proto", "hy2"));
     cfg.default_bandwidth = static_cast<int>(root.GetInt64("default_bandwidth", 100));
     cfg.minimize_to_tray = root.GetBool("minimize_to_tray", true);
+    // 全局高级参数默认值 ("advanced" 子对象 或 顶层 adv_* 键均支持)
+    const JsonValue* adv = root.Get("advanced");
+    if (adv && adv->type == JsonValue::kObject) {
+        cfg.adv_broker = adv->GetString("broker");
+        cfg.adv_stun = adv->GetString("stun");
+        cfg.adv_turn = adv->GetString("turn");
+        cfg.adv_proxy = adv->GetString("proxy");
+        cfg.adv_peer_key = adv->GetString("key");
+        cfg.adv_keepalive = adv->GetString("keepalive");
+        cfg.adv_ice_ports = adv->GetString("ice_ports");
+        cfg.adv_nat1to1 = adv->GetString("nat1to1");
+        cfg.adv_idle_timeout = adv->GetString("idle_timeout");
+        cfg.adv_max_peers = static_cast<int>(adv->GetInt64("max_peers", 0));
+        cfg.adv_force_relay = adv->GetBool("force_relay", false);
+        cfg.adv_keep_proxy = adv->GetBool("keep_proxy", false);
+    } else {
+        cfg.adv_broker = root.GetString("adv_broker");
+        cfg.adv_stun = root.GetString("adv_stun");
+        cfg.adv_turn = root.GetString("adv_turn");
+        cfg.adv_proxy = root.GetString("adv_proxy");
+        cfg.adv_peer_key = root.GetString("adv_peer_key");
+        cfg.adv_keepalive = root.GetString("adv_keepalive");
+        cfg.adv_ice_ports = root.GetString("adv_ice_ports");
+        cfg.adv_nat1to1 = root.GetString("adv_nat1to1");
+        cfg.adv_idle_timeout = root.GetString("adv_idle_timeout");
+        cfg.adv_max_peers = static_cast<int>(root.GetInt64("adv_max_peers", 0));
+        cfg.adv_force_relay = root.GetBool("adv_force_relay", false);
+        cfg.adv_keep_proxy = root.GetBool("adv_keep_proxy", false);
+    }
 
     if (const JsonValue* exp = root.Get("expose")) {
         if (exp->type == JsonValue::kArray) {
@@ -760,17 +817,34 @@ bool ParseAppConfigFromJson(const std::string& json_text, AppConfig& out_cfg, st
 
     if (const JsonValue* flat = root.Get("tunnels")) {
         if (flat->type == JsonValue::kArray) {
+            // 新格式: 角色无关统一列表。mode 字段只作为 "上次角色" 提示 (缺省 expose)，
+            // 运行时可自由切换 expose/connect。写入时归入 tunnels 列表。
             for (const auto& item : flat->arr_val) {
                 if (item.type == JsonValue::kObject) {
                     TunnelRule r = RuleFromJsonValue(item, "", cfg.default_proto, cfg.default_bandwidth);
-                    if (r.mode == "connect") {
-                        cfg.connect.push_back(r);
-                    } else {
-                        cfg.expose.push_back(r);
+                    if (r.last_role.empty() && !r.mode.empty()) {
+                        r.last_role = r.mode; // 旧字段迁移
                     }
+                    cfg.tunnels.push_back(r);
                 }
             }
         }
+    }
+
+    // 旧格式迁移: expose/connect 双列表 → 合并进统一 tunnels (角色作为 last_role)
+    if (cfg.tunnels.empty() && (!cfg.expose.empty() || !cfg.connect.empty())) {
+        for (const auto& r : cfg.expose) {
+            TunnelRule t = r;
+            t.last_role = "expose";
+            cfg.tunnels.push_back(t);
+        }
+        for (const auto& r : cfg.connect) {
+            TunnelRule t = r;
+            t.last_role = "connect";
+            cfg.tunnels.push_back(t);
+        }
+        cfg.expose.clear();
+        cfg.connect.clear();
     }
 
     NormalizeAppConfig(cfg);
@@ -837,7 +911,7 @@ bool ParseStatusSnapshotJson(const std::string& json_text, StatusSnapshot& out_s
 }
 
 std::string BuildPairingUri(const TunnelRule& r, const std::string& default_secret) {
-    std::string secret = Trim(r.secret).empty() ? Trim(default_secret) : Trim(r.secret);
+    std::string secret = Trim(default_secret);
     std::string port = (r.mode == "expose") ? SuggestConnectPort(r.port) : ExtractPortOnly(r.port);
     std::string proto = NormalizeProto(r.proto);
     int bw = r.bandwidth_mbps > 0 ? r.bandwidth_mbps : 100;
@@ -865,7 +939,7 @@ std::string BuildPairingUri(const TunnelRule& r, const std::string& default_secr
 }
 
 std::string BuildCliCommand(const TunnelRule& r, const std::string& default_secret) {
-    std::string secret = Trim(r.secret).empty() ? Trim(default_secret) : Trim(r.secret);
+    std::string secret = Trim(default_secret);
     std::string proto = NormalizeProto(r.proto);
     int bw = r.bandwidth_mbps > 0 ? r.bandwidth_mbps : 100;
     std::string listen_ep = (r.mode == "expose")
@@ -936,7 +1010,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
             out_err = "p2ptun:// 配对码缺少隧道名称 (name)";
             return false;
         }
-        r.secret = Trim(kv["secret"]);
+        // 密钥统一由全局 default_secret 管理；配对码里的 secret 字段仅用于展示兼容，忽略
         r.port = Trim(kv["port"]);
         if (r.port.empty()) r.port = "1080";
         r.proto = NormalizeProto(kv["proto"]);
@@ -982,7 +1056,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
                     if ((arg == "-id" || arg == "-peer" || arg == "-name" || arg == "--id" || arg == "--peer" || arg == "--name") && i + 1 < tokens.size()) {
                         r.name = tokens[++i];
                     } else if ((arg == "-secret" || arg == "--secret") && i + 1 < tokens.size()) {
-                        r.secret = tokens[++i];
+                        ++i; // 密钥统一走全局 default_secret，跳过
                     } else if ((arg == "-target" || arg == "-listen" || arg == "--target" || arg == "--listen") && i + 1 < tokens.size()) {
                         r.port = tokens[++i];
                     } else if ((arg == "-proto" || arg == "-transport" || arg == "--proto") && i + 1 < tokens.size()) {
@@ -1046,7 +1120,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
                 TunnelRule r;
                 r.mode = "connect";
                 r.name = name;
-                r.secret = secret;
+                (void)secret; // 密钥统一走全局 default_secret
                 r.port = port_part;
                 r.remark = "快捷导入 " + name;
                 r.enabled = true;
@@ -1060,9 +1134,7 @@ bool ParsePairingInput(const std::string& raw_input, TunnelRule& out_rule, std::
     return false;
 }
 
-std::string EffectiveSecret(const TunnelRule& rule, const AppConfig& global_cfg) {
-    std::string sec = Trim(rule.secret);
-    if (!sec.empty()) return sec;
+std::string EffectiveSecret(const AppConfig& global_cfg) {
     return Trim(global_cfg.default_secret);
 }
 
@@ -1071,6 +1143,14 @@ std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppCo
     std::string proto = NormalizeProto(rule.proto.empty() ? global_cfg.default_proto : rule.proto);
     int bw = rule.bandwidth_mbps > 0 ? rule.bandwidth_mbps : (global_cfg.default_bandwidth > 0 ? global_cfg.default_bandwidth : 100);
     std::string ep = NormalizeEndpoint(rule.port, mode == "connect" ? "13389" : "3389");
+    // 单规则留空的字段回退到全局 advanced 默认值 (rule 字段 = 覆盖层)
+    auto pick = [](const std::string& rule_val, const std::string& global_val) -> std::string {
+        std::string rv = Trim(rule_val);
+        return rv.empty() ? Trim(global_val) : rv;
+    };
+    int eff_max_peers = rule.max_peers > 0 ? rule.max_peers : global_cfg.adv_max_peers;
+    bool eff_force_relay = rule.force_relay || global_cfg.adv_force_relay;
+    bool eff_keep_proxy = rule.keep_proxy || global_cfg.adv_keep_proxy;
 
     std::vector<std::string> args;
     args.push_back(mode);
@@ -1090,82 +1170,47 @@ std::vector<std::string> BuildSubprocessArgs(const TunnelRule& rule, const AppCo
     args.push_back("-bandwidth");
     args.push_back(std::to_string(bw));
 
-    // 高级穿透参数：留空不传，由 p2ptun 使用内置默认 (上游 main.go flag 全集)
-    if (!Trim(rule.broker).empty()) {
-        args.push_back("-broker");
-        args.push_back(Trim(rule.broker));
-    }
-    if (!Trim(rule.stun).empty()) {
-        args.push_back("-stun");
-        args.push_back(Trim(rule.stun));
-    }
-    if (!Trim(rule.turn).empty()) {
-        args.push_back("-turn");
-        args.push_back(Trim(rule.turn));
-    }
-    if (!Trim(rule.proxy).empty()) {
-        args.push_back("-proxy");
-        args.push_back(Trim(rule.proxy));
-    }
-    if (!Trim(rule.peer_key).empty() && Trim(rule.peer_key) != "peerjs") {
-        args.push_back("-key");
-        args.push_back(Trim(rule.peer_key));
-    }
-    if (!Trim(rule.keepalive).empty()) {
-        args.push_back("-keepalive");
-        args.push_back(Trim(rule.keepalive));
-    }
-    if (!Trim(rule.ice_ports).empty()) {
-        args.push_back("-ice-ports");
-        args.push_back(Trim(rule.ice_ports));
-    }
-    if (!Trim(rule.nat1to1).empty()) {
-        args.push_back("-nat1to1");
-        args.push_back(Trim(rule.nat1to1));
-    }
-    if (mode == "expose" && rule.max_peers > 0) {
-        args.push_back("-max-peers");
-        args.push_back(std::to_string(rule.max_peers));
-    }
-    if (mode == "connect") {
-        if (rule.on_demand) {
-            args.push_back("-on-demand");
-            if (!Trim(rule.idle_timeout).empty() && Trim(rule.idle_timeout) != "10m") {
-                args.push_back("-idle-timeout");
-                args.push_back(Trim(rule.idle_timeout));
+    // 高级穿透参数：单规则覆盖 > 全局默认 > p2ptun 内置默认 (上游 main.go flag 全集)
+    {
+        std::string v;
+        v = pick(rule.broker, global_cfg.adv_broker);
+        if (!v.empty()) { args.push_back("-broker"); args.push_back(v); }
+        v = pick(rule.stun, global_cfg.adv_stun);
+        if (!v.empty()) { args.push_back("-stun"); args.push_back(v); }
+        v = pick(rule.turn, global_cfg.adv_turn);
+        if (!v.empty()) { args.push_back("-turn"); args.push_back(v); }
+        v = pick(rule.proxy, global_cfg.adv_proxy);
+        if (!v.empty()) { args.push_back("-proxy"); args.push_back(v); }
+        v = pick(rule.peer_key, global_cfg.adv_peer_key);
+        if (!v.empty() && v != "peerjs") { args.push_back("-key"); args.push_back(v); }
+        v = pick(rule.keepalive, global_cfg.adv_keepalive);
+        if (!v.empty()) { args.push_back("-keepalive"); args.push_back(v); }
+        v = pick(rule.ice_ports, global_cfg.adv_ice_ports);
+        if (!v.empty()) { args.push_back("-ice-ports"); args.push_back(v); }
+        v = pick(rule.nat1to1, global_cfg.adv_nat1to1);
+        if (!v.empty()) { args.push_back("-nat1to1"); args.push_back(v); }
+        v = pick(rule.idle_timeout, global_cfg.adv_idle_timeout);
+        if (mode == "expose" && eff_max_peers > 0) {
+            args.push_back("-max-peers");
+            args.push_back(std::to_string(eff_max_peers));
+        }
+        if (mode == "connect") {
+            if (rule.on_demand) {
+                args.push_back("-on-demand");
+                if (!v.empty() && v != "10m") {
+                    args.push_back("-idle-timeout");
+                    args.push_back(v);
+                }
             }
         }
-        if (!Trim(rule.idle_timeout).empty() && !rule.on_demand) {
-            // idle-timeout 仅在 on-demand 模式下有意义，静默忽略
-        }
-    }
-    if (rule.force_relay) {
-        args.push_back("-force-relay");
-    }
-    if (rule.keep_proxy) {
-        args.push_back("-keep-proxy");
+        if (eff_force_relay) args.push_back("-force-relay");
+        if (eff_keep_proxy) args.push_back("-keep-proxy");
     }
     if (status_port > 0) {
         args.push_back("-status-addr");
         args.push_back("127.0.0.1:" + std::to_string(status_port));
     }
     return args;
-}
-
-bool ParseSerialParams(const std::string& params, int& out_databits, char& out_parity, int& out_stopbits) {
-    std::string s = Trim(params);
-    if (s.size() < 3) return false;
-    // 格式: <数据位 7|8><校验 N|O|E><停止位 1|2>，如 "8N1"
-    char db = s[0];
-    char parity = static_cast<char>(std::toupper(static_cast<unsigned char>(s[1])));
-    char sb = s[2];
-    if (db != '7' && db != '8') return false;
-    if (parity != 'N' && parity != 'O' && parity != 'E') return false;
-    if (sb != '1' && sb != '2') return false;
-    out_databits = db - '0';
-    out_parity = parity;
-    out_stopbits = sb - '0';
-    return true;
 }
 
 std::string FormatBytes(uint64_t bytes) {

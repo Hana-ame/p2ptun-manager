@@ -42,10 +42,26 @@ jobs:
         run: |
           ctest --test-dir build -C Release --output-on-failure
 
+      - name: Download upstream p2ptun.exe (merged into portable bundle)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist/p2ptun-win-x64
+          # 从上游 Hana-ame/p2ptun 最新 Release 拉取官方 p2ptun.exe (只下载，不修改)
+          gh release download --repo Hana-ame/p2ptun --pattern 'p2ptun_windows_amd64.exe' --dir dist/p2ptun-win-x64 --clobber \
+            || gh release download --repo Hana-ame/p2ptun --pattern '*windows*amd64*.exe' --dir dist/p2ptun-win-x64 --clobber
+          cd dist/p2ptun-win-x64
+          for f in p2ptun_windows_amd64.exe *.exe; do
+            if [ -f "$f" ] && [ "$f" != "p2ptun-gui.exe" ]; then
+              mv "$f" p2ptun.exe && break
+            fi
+          done
+          ls -la
+
       - name: Prepare Release Assets & Portable Bundle
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/p2ptun-win-x64 | Out-Null
           Copy-Item build/Release/p2ptun-gui.exe dist/p2ptun-gui.exe
           Copy-Item build/Release/p2ptun-gui.exe dist/p2ptun-win-x64/p2ptun-gui.exe
           Copy-Item config.example.json dist/p2ptun-win-x64/config.json

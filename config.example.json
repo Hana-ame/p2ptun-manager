@@ -1,74 +1,56 @@
 {
+  // p2ptun 管理器配置 (统一隧道模型: 每条配置同时可作为 Server/Client，运行时自选角色)
   "p2ptun_path": "p2ptun.exe",
   "default_secret": "my-secret-123456",
   "default_proto": "hy2",
   "default_bandwidth": 100,
   "minimize_to_tray": true,
-  "expose": [
+
+  // 全局高级参数默认值 (所有隧道共享; 单条隧道可用 advanced 覆盖)
+  "advanced": {
+    "broker": "wss://0.peerjs.com",
+    "keepalive": "15s",
+    "max_peers": 16
+  },
+
+  // 统一隧道列表: id + ip:port, mode 为上次运行角色 (expose=Server / connect=Client)
+  "tunnels": [
     {
-      "id": "expose-rdp",
-      "remark": "本机远程桌面 (RDP)",
-      "name": "home-rdp",
-      "port": "3389",
-      "proto": "hy2",
-      "bandwidth_mbps": 100,
+      // Server 端: 暴露本机 3389 (RDP)
+      "id": "tunnel-rdp",
+      "remark": "远程桌面 (RDP)",
+      "name": "my-rdp",
+      "port": "127.0.0.1:3389",
+      "mode": "expose",
+      "last_role": "expose",
       "enabled": false
     },
     {
-      "id": "expose-ssh",
-      "remark": "本机 SSH / WSL2",
-      "name": "home-ssh",
-      "port": "22",
-      "proto": "hy2",
-      "bandwidth_mbps": 100,
+      // 同一配置切到 Client 角色即可连接对端 (端口自动建议 13389 避开系统占用)
+      "id": "tunnel-rdp",
+      "remark": "远程桌面 (RDP)",
+      "name": "my-rdp",
+      "port": "127.0.0.1:13389",
+      "mode": "connect",
+      "last_role": "connect",
       "enabled": false
     },
     {
-      "id": "expose-web",
-      "remark": "本机 Web 服务",
-      "name": "home-web",
-      "port": "8080",
-      "proto": "hy2",
-      "bandwidth_mbps": 100,
+      "id": "tunnel-ssh",
+      "remark": "SSH / WSL2",
+      "name": "my-ssh",
+      "port": "127.0.0.1:22",
+      "mode": "expose",
+      "last_role": "expose",
       "enabled": false
     },
     {
-      "id": "expose-serial",
-      "remark": "工控机串口透传 (COM3)",
-      "name": "plc-serial",
-      "port": "9103",
-      "serial_port": "COM3",
-      "serial_baud": 115200,
-      "serial_params": "8N1",
-      "enabled": false
-    }
-  ],
-  "connect": [
-    {
-      "id": "connect-rdp",
-      "remark": "连接家里远程桌面 (本地13389)",
-      "name": "home-rdp",
-      "port": "13389",
-      "proto": "hy2",
-      "bandwidth_mbps": 100,
-      "enabled": false
-    },
-    {
-      "id": "connect-proxy",
-      "remark": "连接远端代理端口 (本地1080)",
-      "name": "office-proxy",
-      "port": "1080",
-      "proto": "hy2",
-      "bandwidth_mbps": 100,
-      "enabled": false
-    },
-    {
-      "id": "connect-rdp-adv",
-      "remark": "按需连接 + 心跳/端口范围调优",
-      "name": "home-rdp",
-      "port": "13389",
-      "keepalive": "15s",
-      "ice_ports": "40000-40100",
+      "id": "tunnel-proxy",
+      "remark": "代理 (SOCKS5/HTTP)",
+      "name": "my-proxy",
+      "port": "127.0.0.1:1080",
+      "mode": "connect",
+      "last_role": "connect",
       "on_demand": true,
       "idle_timeout": "30m",
       "enabled": false

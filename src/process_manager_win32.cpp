@@ -168,54 +168,6 @@ bool HttpLocalRequest(int port, const std::wstring& method, const std::wstring& 
     return ok == TRUE;
 }
 
-// ---------------- 串口桥接 Win32 原生实现 (移植自 C# SerialTcpBridge，零外部依赖) ----------------
-
-struct SerialNative {
-    HANDLE com = nullptr;
-    OVERLAPPED io{};
-};
-
-void LogTo(LogBuffer& logs, const std::string& prefix, const std::string& msg) {
-    logs.Append(prefix, msg);
-}
-
-bool ParseHostPort(const std::string& ep, std::string& host, int& port) {
-    auto pos = ep.rfind(':');
-    if (pos == std::string::npos) return false;
-    host = p2ptun::Trim(ep.substr(0, pos));
-    std::string ps = p2ptun::Trim(ep.substr(pos + 1));
-    if (host.empty() || ps.empty()) return false;
-    if (host == "localhost") host = "127.0.0.1";
-    port = std::atoi(ps.c_str());
-    return port > 0 && port <= 65535;
-}
-
-SOCKET TcpConnectBlocking(const std::string& host, int port, int timeout_ms) {
-    struct sockaddr_in sa{};
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(static_cast<unsigned short>(port));
-    inet_pton(AF_INET, host.c_str(), &sa.sin_addr);
-    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == INVALID_SOCKET) return INVALID_SOCKET;
-
-    // 非阻塞连接 + 超时，避免串口桥接线程卡死
-    u_long nb = 1;
-    ioctlsocket(s, FIONBIO, &nb);
-    connect(s, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa));
-    fd_set wset;
-    FD_ZERO(&wset);
-    FD_SET(s, &wset);
-    struct timeval tv{};
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    if (select(0, nullptr, &wset, nullptr, &tv) <= 0) {
-        closesocket(s);
-        return INVALID_SOCKET;
-    }
-    nb = 0;
-    ioctlsocket(s, FIONBIO, &nb);
-    return s;
-}
 #endif
 
 } // namespace
@@ -359,21 +311,18 @@ void MultiTunnelManager::RebuildInstancesLocked() {
         }
     };
 
-    for (const auto& r : cfg_.expose) appendRule(r);
-    for (const auto& r : cfg_.connect) appendRule(r);
+    // 统一隧道配置: 每条配置角色无关, rule.mode 表示当前/上次运行角色
+    for (const auto& r : cfg_.tunnels) appendRule(r);
     instances_ = std::move(next_list);
 }
 
 void MultiTunnelManager::SyncConfigFromInstancesLocked() {
-    cfg_.expose.clear();
-    cfg_.connect.clear();
+    cfg_.tunnels.clear();
     for (const auto& inst : instances_) {
         std::lock_guard<std::mutex> ilock(inst->mu);
-        if (inst->rule.mode == "connect") {
-            cfg_.connect.push_back(inst->rule);
-        } else {
-            cfg_.expose.push_back(inst->rule);
-        }
+        TunnelRule r = inst->rule;
+        if (r.mode != "connect") r.mode = "expose";
+        cfg_.tunnels.push_back(r);
     }
 }
 
@@ -414,6 +363,36 @@ bool MultiTunnelManager::ReloadConfigFromDisk(std::string& out_err) {
     logs_.Append("系统", "已从磁盘重新加载配置文件: " + config_path_);
     StartAutoEnabled();
     return true;
+}
+
+bool MultiTunnelManager::UpdateAdvancedDefaults(const AppConfig& advanced_part, std::string& out_err) {
+    std::lock_guard<std::mutex> lock(mu_);
+    cfg_.adv_broker = advanced_part.adv_broker;
+    cfg_.adv_stun = advanced_part.adv_stun;
+    cfg_.adv_turn = advanced_part.adv_turn;
+    cfg_.adv_proxy = advanced_part.adv_proxy;
+    cfg_.adv_peer_key = advanced_part.adv_peer_key;
+    cfg_.adv_keepalive = advanced_part.adv_keepalive;
+    cfg_.adv_ice_ports = advanced_part.adv_ice_ports;
+    cfg_.adv_nat1to1 = advanced_part.adv_nat1to1;
+    cfg_.adv_idle_timeout = advanced_part.adv_idle_timeout;
+    cfg_.adv_max_peers = advanced_part.adv_max_peers;
+    cfg_.adv_force_relay = advanced_part.adv_force_relay;
+    cfg_.adv_keep_proxy = advanced_part.adv_keep_proxy;
+    bool ok = SaveConfigLocked(out_err);
+    if (ok) {
+        logs_.Append("设置", "已保存全局高级参数默认值");
+    }
+    return ok;
+}
+
+bool MultiTunnelManager::ExportConfig(const std::string& target_path, std::string& out_err) const {
+    AppConfig cfg;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        cfg = cfg_;
+    }
+    return SaveAppConfigToFile(target_path, cfg, out_err);
 }
 
 bool MultiTunnelManager::AddOrUpdateRule(const TunnelRule& raw_rule, bool auto_start, std::string& out_id, std::string& out_err) {
@@ -501,7 +480,7 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
     inst.rx_rate_bps = 0;
     inst.last_rate_time = std::chrono::steady_clock::now();
 
-    std::string secret = EffectiveSecret(inst.rule, cfg_);
+    std::string secret = EffectiveSecret(cfg_);
     if (secret.empty()) {
         out_err = "配对密钥不能为空，请在全局设置或当前规则中填写密钥";
         inst.last_start_error = out_err;
@@ -578,6 +557,8 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
     inst.process_handle = pi.hProcess;
     inst.pid = pi.dwProcessId;
     inst.running = true;
+    inst.rule.last_role = inst.rule.mode; // 记住成功角色, 重启后恢复
+    inst.last_start_error.clear();
 
     if (inst.log_thread.joinable()) {
         inst.log_thread.detach();
@@ -603,17 +584,6 @@ bool MultiTunnelManager::StartInstanceLocked(ManagedInstance& inst, std::string&
         CloseHandle(hReadPipe);
     });
 
-    // 串口桥接：进程启动成功后打开 (合并自 C# SerialTcpBridge 的管理器托管模式)
-    if (!Trim(inst.rule.serial_port).empty()) {
-        inst.serial_bridge = std::make_shared<SerialTcpBridge>(inst.rule, logs_);
-        std::string s_err;
-        if (inst.serial_bridge->Start(s_err)) {
-            // 桥接器持有串口; 正常运行
-        } else {
-            logs_.Append(prefix, "⚠ 串口桥接启动失败: " + s_err);
-            inst.serial_bridge.reset();
-        }
-    }
     inst.watchdog_restarts = 0;
 
     logs_.Append(prefix, "▶ 隧道已启动 (PID=" + std::to_string(inst.pid) + ", 方向=" + inst.rule.mode +
@@ -631,7 +601,6 @@ void MultiTunnelManager::StopInstanceInternal(ManagedInstance& inst) {
     int status_port = 0;
     void* proc_handle = nullptr;
     std::string remark;
-    std::shared_ptr<SerialTcpBridge> bridge;
     {
         std::lock_guard<std::mutex> ilock(inst.mu);
         if (!inst.running && !inst.process_handle) {
@@ -646,12 +615,7 @@ void MultiTunnelManager::StopInstanceInternal(ManagedInstance& inst) {
         inst.rx_rate_bps = 0;
         inst.last_snap = StatusSnapshot{};
         remark = inst.rule.remark;
-        bridge = inst.serial_bridge;
-        inst.serial_bridge.reset();
         inst.watchdog_restarts = 0;
-    }
-    if (bridge) {
-        bridge->Stop(); // 串口句柄与桥接线程在此回收
     }
 
 #ifdef _WIN32
@@ -849,7 +813,6 @@ void MultiTunnelManager::PollAllStatuses() {
         std::string rremark;
         if (proc_handle) {
             if (GetExitCodeProcess(static_cast<HANDLE>(proc_handle), &exit_code) && exit_code != STILL_ACTIVE) {
-                std::shared_ptr<SerialTcpBridge> dead_bridge;
                 {
                     std::lock_guard<std::mutex> ilock(inst->mu);
                     CloseHandle(static_cast<HANDLE>(inst->process_handle));
@@ -862,11 +825,6 @@ void MultiTunnelManager::PollAllStatuses() {
                     want_restart = inst->rule.auto_restart;
                     rid = inst->rule.id;
                     rremark = inst->rule.remark;
-                    dead_bridge = inst->serial_bridge;
-                    inst->serial_bridge.reset();
-                }
-                if (dead_bridge) {
-                    dead_bridge->Stop();
                 }
                 if (want_restart && inst->watchdog_restarts < 5) {
                     inst->watchdog_restarts++;
@@ -1078,249 +1036,4 @@ bool MultiTunnelManager::LaunchClientForTunnel(const std::string& id, std::strin
 }
 
 
-// ============================================================================
-// SerialTcpBridge — COM 串口 <-> TCP 双向透传桥接 (合并自 C# SerialTcpBridge)
-// ============================================================================
-
-SerialTcpBridge::SerialTcpBridge(const TunnelRule& rule, LogBuffer& logs)
-    : rule_(rule), logs_(logs) {}
-
-SerialTcpBridge::~SerialTcpBridge() {
-    Stop();
-}
-
-bool SerialTcpBridge::ComPortExists(const std::string& com_name) {
-#ifdef _WIN32
-    std::string device = "\\\\.\\" + p2ptun::Trim(com_name);
-    HANDLE h = CreateFileA(device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                           OPEN_EXISTING, 0, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    CloseHandle(h);
-    return true;
-#else
-    (void)com_name;
-    return false;
-#endif
-}
-
-bool SerialTcpBridge::OpenComPort(std::string& out_err) {
-#ifdef _WIN32
-    std::string device = "\\\\.\\" + p2ptun::Trim(rule_.serial_port);
-    com_handle_ = CreateFileA(device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                              OPEN_EXISTING, 0, nullptr);
-    if (com_handle_ == INVALID_HANDLE_VALUE || com_handle_ == nullptr) {
-        out_err = "无法打开串口 " + rule_.serial_port + " (错误码 " + std::to_string(GetLastError()) + ")";
-        com_handle_ = nullptr;
-        return false;
-    }
-
-    int databits = 8; char parity = 'N'; int stopbits = 1;
-    p2ptun::ParseSerialParams(rule_.serial_params, databits, parity, stopbits);
-
-    DCB dcb{};
-    dcb.DCBlength = sizeof(DCB);
-    if (!GetCommState(static_cast<HANDLE>(com_handle_), &dcb)) {
-        out_err = "读取串口状态失败 (GetCommState)";
-        CloseComPort();
-        return false;
-    }
-    dcb.BaudRate = static_cast<DWORD>(rule_.serial_baud > 0 ? rule_.serial_baud : 115200);
-    dcb.ByteSize = static_cast<BYTE>(databits);
-    dcb.Parity = (parity == 'O') ? ODDPARITY : ((parity == 'E') ? EVENPARITY : NOPARITY);
-    dcb.StopBits = (stopbits == 2) ? TWOSTOPBITS : ONESTOPBIT;
-    if (!SetCommState(static_cast<HANDLE>(com_handle_), &dcb)) {
-        out_err = "设置串口参数失败 (SetCommState)";
-        CloseComPort();
-        return false;
-    }
-
-    COMMTIMEOUTS timeouts{};
-    timeouts.ReadIntervalTimeout = 20;
-    timeouts.ReadTotalTimeoutMultiplier = 1;
-    timeouts.ReadTotalTimeoutConstant = 50;
-    timeouts.WriteTotalTimeoutMultiplier = 1;
-    timeouts.WriteTotalTimeoutConstant = 50;
-    SetCommTimeouts(static_cast<HANDLE>(com_handle_), &timeouts);
-    return true;
-#else
-    (void)out_err;
-    return false;
-#endif
-}
-
-void SerialTcpBridge::CloseComPort() {
-#ifdef _WIN32
-    if (com_handle_) {
-        CloseHandle(static_cast<HANDLE>(com_handle_));
-        com_handle_ = nullptr;
-    }
-#endif
-}
-
-int SerialTcpBridge::ReadCom(char* buf, int len) {
-#ifdef _WIN32
-    if (!com_handle_) return 0;
-    DWORD read_n = 0;
-    if (!ReadFile(static_cast<HANDLE>(com_handle_), buf, static_cast<DWORD>(len), &read_n, nullptr)) {
-        return -1;
-    }
-    return static_cast<int>(read_n);
-#else
-    (void)buf; (void)len;
-    return 0;
-#endif
-}
-
-bool SerialTcpBridge::WriteCom(const char* buf, int len) {
-#ifdef _WIN32
-    if (!com_handle_) return false;
-    DWORD written = 0;
-    return WriteFile(static_cast<HANDLE>(com_handle_), buf, static_cast<DWORD>(len), &written, nullptr) == TRUE;
-#else
-    (void)buf; (void)len;
-    return false;
-#endif
-}
-
-void SerialTcpBridge::ServerLoop(std::string host, int port) {
-#ifdef _WIN32
-    struct sockaddr_in sa{};
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(static_cast<unsigned short>(port));
-    inet_pton(AF_INET, host.c_str(), &sa.sin_addr);
-    SOCKET lis = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (lis == INVALID_SOCKET) {
-        LogTo(logs_, rule_.remark, "串口桥接: 创建监听 socket 失败");
-        return;
-    }
-    int reuse = 1;
-    setsockopt(lis, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-    if (bind(lis, reinterpret_cast<struct sockaddr*>(&sa), sizeof(sa)) == SOCKET_ERROR ||
-        listen(lis, 1) == SOCKET_ERROR) {
-        LogTo(logs_, rule_.remark, "串口桥接: 监听 " + host + ":" + std::to_string(port) + " 失败 (端口被占用?)");
-        closesocket(lis);
-        return;
-    }
-    listen_sock_ = reinterpret_cast<void*>(lis);
-    LogTo(logs_, rule_.remark, "串口桥接: Expose 模式监听 TCP " + host + ":" + std::to_string(port) +
-                                   " <-> 串口 " + rule_.serial_port);
-
-    while (!stopping_.load()) {
-        SOCKET client = accept(lis, nullptr, nullptr);
-        if (client == INVALID_SOCKET) break;
-        LogTo(logs_, rule_.remark, "串口桥接: 收到 p2ptun 隧道连接");
-        PumpBidirectional(reinterpret_cast<void*>(client));
-    }
-    closesocket(lis);
-    listen_sock_ = nullptr;
-#else
-    (void)host; (void)port;
-#endif
-}
-
-void SerialTcpBridge::ClientLoop(std::string host, int port) {
-#ifdef _WIN32
-    LogTo(logs_, rule_.remark, "串口桥接: Connect 模式尝试连入本地 p2ptun 监听端口 " + host + ":" + std::to_string(port));
-    // 等待 p2ptun connect 进程先就绪
-    for (int i = 0; i < 15 && !stopping_.load(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    while (!stopping_.load()) {
-        SOCKET s = TcpConnectBlocking(host, port, 2000);
-        if (s == INVALID_SOCKET) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-            continue;
-        }
-        LogTo(logs_, rule_.remark, "串口桥接: 已桥接 " + rule_.serial_port + " <-> 本地端口 " + host + ":" + std::to_string(port));
-        PumpBidirectional(reinterpret_cast<void*>(s));
-        if (!stopping_.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-    }
-#else
-    (void)host; (void)port;
-#endif
-}
-
-void SerialTcpBridge::PumpBidirectional(void* sock_handle) {
-#ifdef _WIN32
-    SOCKET s = static_cast<SOCKET>(reinterpret_cast<uintptr_t>(sock_handle));
-    char buf[2048];
-    while (!stopping_.load()) {
-        // TCP -> COM
-        fd_set rset;
-        FD_ZERO(&rset);
-        FD_SET(s, &rset);
-        struct timeval tv{};
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000; // 100ms
-        if (select(0, &rset, nullptr, nullptr, &tv) > 0 && FD_ISSET(s, &rset)) {
-            int n = recv(s, buf, sizeof(buf), 0);
-            if (n <= 0) break;
-            if (!WriteCom(buf, n)) break;
-        }
-        // COM -> TCP (ReadCom 受 COMMTIMEOUTS 约束最多阻塞 ~70ms)
-        int m = ReadCom(buf, sizeof(buf));
-        if (m > 0) {
-            if (send(s, buf, m, 0) == SOCKET_ERROR) break;
-        } else if (m < 0) {
-            break;
-        }
-    }
-    closesocket(s);
-    LogTo(logs_, rule_.remark, "串口桥接: 桥接连接已断开");
-#else
-    (void)sock_handle;
-#endif
-}
-
-bool SerialTcpBridge::Start(std::string& out_err) {
-    if (p2ptun::Trim(rule_.serial_port).empty()) {
-        out_err = "未配置串口号";
-        return false;
-    }
-#ifdef _WIN32
-    if (!OpenComPort(out_err)) {
-        return false;
-    }
-    LogTo(logs_, rule_.remark, "串口桥接: 已打开串口 " + rule_.serial_port + " (" +
-                                   std::to_string(rule_.serial_baud) + " bps, " + rule_.serial_params + ")");
-    std::string ep = p2ptun::NormalizeEndpoint(rule_.port, "1080");
-    std::string host;
-    int port = 0;
-    if (!ParseHostPort(ep, host, port)) {
-        out_err = "串口桥接: 端口地址格式无效 " + ep;
-        Stop();
-        return false;
-    }
-    stopping_.store(false);
-    pump_thread_ = std::thread([this, host, port]() {
-        if (rule_.mode == "expose") {
-            ServerLoop(host, port);
-        } else {
-            ClientLoop(host, port);
-        }
-    });
-    return true;
-#else
-    out_err = "串口桥接仅支持 Windows";
-    return false;
-#endif
-}
-
-void SerialTcpBridge::Stop() {
-    stopping_.store(true);
-#ifdef _WIN32
-    if (listen_sock_) {
-        closesocket(static_cast<SOCKET>(reinterpret_cast<uintptr_t>(listen_sock_)));
-        listen_sock_ = nullptr;
-    }
-    CloseComPort();
-#endif
-    if (pump_thread_.joinable()) {
-        pump_thread_.join();
-    }
-}
 } // namespace p2ptun

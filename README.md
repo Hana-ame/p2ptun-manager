@@ -4,7 +4,7 @@
 
 **只管理、不修改 p2ptun 本体**：管理器以子进程方式拉起 `p2ptun.exe`，全部参数与控制接口均严格对齐上游 v0.5.2 的 flag 定义与 `GET /status` JSON 快照（见上游 `main.go` usage 与 `daemon.go statusSnapshot`）。
 
-在一个原生窗口中**同时管理多个 Expose（暴露本机服务）与多个 Connect（连接远程隧道）实例**：傻瓜式一键预设、`p2ptun://` 配对码复制粘贴、全高级参数透传、内置 COM 串口桥接、看门狗守护重启与实时速率监控。
+在一个原生窗口中**同时管理多个隧道实例**（每条隧道运行时自选 Server/Client 角色）：傻瓜式一键预设、`p2ptun://` 配对码复制粘贴、全高级参数透传、看门狗守护重启与实时速率监控。
 
 ## ✨ 核心特性
 
@@ -14,8 +14,11 @@
   - 纯数字端口自动补全（`3389` → `127.0.0.1:3389`），全局默认密钥/协议/带宽自动继承。
   - 场景一键预设：RDP `3389`、SSH `22`、SOCKS5 `1080`、Clash `7890`、Web `8080`、Minecraft `25565`、幻兽帕鲁 `8211`。
   - `p2ptun://` 一键配对码：暴露端点击【📋 复制傻瓜配对码】，对端点击【📥 粘贴配对码一键导入并连接】即自动避开系统占用端口（`3389` → `13389`）并立即启动。配对码同时兼容 `p2ptun connect ...` 命令行与 `隧道名:密钥@端口` 极简口令。
-- **全高级参数透传**：规则编辑区支持 `key=value` 直接填写并透传 p2ptun 全部 flag —— `broker / stun / turn / proxy / key / keepalive / ice_ports / nat1to1 / idle_timeout / max_peers / force_relay / keep_proxy`；留空即使用 p2ptun 内置默认，不做任何隐藏改写。
-- **内置 COM 串口桥接**：选择串口（波特率 `9600`~`921600`，`8N1`/`7E2`/`8O1`）后，管理器自动在本机端口与物理串口间双向透传 —— Expose 模式把本机串口暴露给远端，Connect 模式把远端串口映射到本地串口（Win32 原生 API，零第三方库）。
+- **简易模式 / 高级模式一键切换**：默认简易模式只让你填两个框——**id + ip:port**；点【⚙ 高级模式】才展开备注、协议、带宽、按需连接与单条高级参数覆盖。日常使用零干扰。
+- **Client / Server 共用同一配置**：每条隧道只需配置一次（id + ip:port），运行时自己在 Server（暴露本机端口）与 Client（连接远端隧道）之间选角色；切换角色时端口建议自动反转（`3389` ↔ `13389`），两端复用同一个 id 即可配对。
+- **全高级参数透传（全局默认 + 单条覆盖）**：`broker / stun / turn / proxy / key / keepalive / ice_ports / nat1to1 / idle_timeout / max_peers / force_relay / keep_proxy / on_demand` 支持全局默认值（对所有隧道生效）与单条覆盖；留空即使用 p2ptun 内置默认，不做任何隐藏改写。
+- **高 DPI 自适应**：PerMonitorV2 声明 + 全部布局/字体按窗口 DPI 缩放，200% 缩放下按钮、表格、文字均为正确大小；跨屏拖动自动重建布局。
+- **批量导出**：一键把完整配置（全局设置 + 全部隧道）导出为 JSON 备份。
 - **企业级安全与守护**（密钥零命令行泄露 + 僵尸进程零残留 + 看门狗自愈）：
   - 密钥通过 `P2PTUN_SECRET` 环境变量注入子进程，绝不出现在命令行/任务管理器；
   - 所有子进程绑定内核 JobObject（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`），GUI 被强杀也不残留僵尸进程；
@@ -39,39 +42,41 @@
   "default_proto": "hy2",
   "default_bandwidth": 100,
   "minimize_to_tray": true,
-  "expose": [
+  "advanced": {
+    "keepalive": "15s",
+    "max_peers": 16
+  },
+  "tunnels": [
     {
-      "remark": "本机远程桌面 (RDP)",
-      "name": "home-rdp",
-      "port": "3389",
-      "max_peers": 32,
-      "enabled": true
+      "id": "tunnel-rdp",
+      "remark": "远程桌面 (RDP)",
+      "name": "my-rdp",
+      "port": "127.0.0.1:3389",
+      "mode": "expose",
+      "last_role": "expose",
+      "enabled": false
     },
     {
-      "remark": "工控机串口透传",
-      "name": "plc-serial",
-      "port": "9103",
-      "serial_port": "COM3",
-      "serial_baud": 115200,
-      "serial_params": "8N1",
-      "enabled": false
-    }
-  ],
-  "connect": [
-    {
-      "remark": "连接家里远程桌面 (本地13389)",
-      "name": "home-rdp",
-      "port": "13389",
-      "keepalive": "15s",
+      "id": "tunnel-proxy",
+      "remark": "代理 (SOCKS5/HTTP)",
+      "name": "my-proxy",
+      "port": "127.0.0.1:1080",
+      "mode": "connect",
+      "last_role": "connect",
       "on_demand": true,
       "idle_timeout": "30m",
-      "enabled": true
+      "enabled": false
     }
   ]
 }
 ```
 
-高级参数均可选填：`broker / stun / turn / proxy / peer_key / keepalive / ice_ports / nat1to1 / idle_timeout / max_peers / keep_proxy / force_relay / auto_restart`；串口字段：`serial_port / serial_baud / serial_params`。留空字段不会写入 JSON，也不会传给 p2ptun。
+说明：
+- `tunnels` 是**统一隧道列表**：每条配置同时能作为 Server 或 Client，`mode`/`last_role` 记录当前/上次运行角色。
+- 全局 `advanced` 对所有隧道生效；单条隧道里的同名字段覆盖全局值。
+- 旧版 `expose` / `connect` 双列表配置会自动迁移合并，无需手工改。
+- 密钥只在全局 `default_secret` 配置一处，所有隧道共用（Manager 通过 `P2PTUN_SECRET` 环境变量注入子进程）。
+- 串口字段已移除（本版不再内置 COM 桥接）。
 
 ## 🛠️ 编译与测试
 
@@ -100,12 +105,12 @@ make test   # 或: g++ -std=c++17 -O2 -Wall -Wextra -pthread src/core.cpp src/pr
 ```text
 p2ptun-manager/
 ├── src/
-│   ├── core.hpp / core.cpp            # 规则模型、JSON 解析(零依赖)、配对码、flag 构造、串口参数
+│   ├── core.hpp / core.cpp            # 规则模型、JSON 解析(零依赖)、配对码、flag 构造
 │   ├── process_manager.hpp             # MultiTunnelManager / SerialTcpBridge 接口
-│   ├── process_manager_win32.cpp       # 进程守护、JobObject、看门狗、/status 轮询、串口桥接
+│   ├── process_manager_win32.cpp       # 进程守护、JobObject、看门狗、/status 轮询
 │   ├── main_win32.cpp                  # Win32 GUI (列表+编辑+日志+托盘)
 │   └── app.rc / app.manifest           # 资源与 PerMonitorV2 DPI 清单
-├── tests/test_core.cpp                 # 核心单测 (端口规范化/配对码/JSON/flag/串口/管理器增删)
+├── tests/test_core.cpp                 # 核心单测 (端口规范化/配对码/JSON/flag/管理器增删)
 ├── CMakeLists.txt
 └── .github/workflows/{ci,release}.yml
 ```
