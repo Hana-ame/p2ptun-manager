@@ -43,6 +43,11 @@ if(WIN32)
     if(MINGW)
         target_link_options(p2ptun-gui PRIVATE -static -static-libgcc -static-libstdc++ -mwindows)
     endif()
+    if(MSVC)
+        # app.rc 已通过 RT_MANIFEST 嵌入自定义 DPI 清单，
+        # 关闭链接器默认 manifest，避免 CVT1100 duplicate resource
+        target_link_options(p2ptun-gui PRIVATE "/MANIFEST:NO")
+    endif()
 else()
     find_package(Threads REQUIRED)
     target_link_libraries(p2ptun_core PUBLIC Threads::Threads)
