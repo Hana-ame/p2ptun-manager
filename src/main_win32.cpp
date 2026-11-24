@@ -935,7 +935,6 @@ void SyncLogText() {
     cur.resize(static_cast<size_t>(len));
     if (cur != w) {
         SetWindowTextW(g_edt_log, w.c_str());
-        SendMessageW(g_edt_log, EM_SELENDOK, 0, 0);
         SendMessageW(g_edt_log, WM_VSCROLL, SB_BOTTOM, 0);
     }
 }
