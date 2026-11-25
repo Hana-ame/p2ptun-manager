@@ -1,29 +1,26 @@
 {
-  // 简易模式配置：全局仅需设定 secret (所有隧道默认全等共用)，每个 item 仅需 id (默认随机生成) 和 port
-  "secret": "p2p-a1b2c3",
+  // 每条隧道自带 secret：两端把 id 和 secret 填成一样的就能配对，端口各填各的。
+  // 顶层 secret 是可选的兜底值，只有当某条隧道没写 secret 时才用得上。
   "tunnels": [
     {
       "id": "tun-7f8a9b",
-      "port": "127.0.0.1:3389"
+      "port": "127.0.0.1:3389",
+      "secret": "p2p-a1b2c3"
     },
     {
       "id": "tun-3c4d5e",
-      "port": "127.0.0.1:22"
+      "port": "127.0.0.1:22",
+      "secret": "p2p-9d8e7f"
     },
     {
       "id": "tun-9e0f1a",
-      "port": "127.0.0.1:1080"
+      "port": "127.0.0.1:1080",
+      "secret": "p2p-4c5d6e"
     }
   ]
 
-  // ---- 以下为高级模式可选配置 (按需开启，不填则使用默认) ----
+  // ---- p2ptun 原生参数仍可写在配置里原样透传，只是界面不展示 ----
   // "p2ptun_path": "p2ptun.exe",
-  // "default_proto": "hy2",
-  // "default_bandwidth": 100,
-  // "minimize_to_tray": true,
-  // "advanced": {
-  //   "broker": "wss://0.peerjs.com",
-  //   "keepalive": "15s",
-  //   "max_peers": 16
-  // }
+  // 单条可选: "proto": "hy2", "bandwidth_mbps": 100, "remark": "家里NAS",
+  //           "on_demand": true, "idle_timeout": "10m"
 }

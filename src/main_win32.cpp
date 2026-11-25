@@ -44,8 +44,6 @@ namespace {
 // ---------------------------------------------------------------------------
 // 控件 ID
 // ---------------------------------------------------------------------------
-constexpr int IDC_EDT_SECRET    = 1001;
-constexpr int IDC_BTN_RAND_SEC  = 1002;
 constexpr int IDC_BTN_ADD       = 1003;
 constexpr int IDC_BTN_LOG       = 1004;
 constexpr int IDC_EDT_LOG       = 1005;
@@ -57,6 +55,8 @@ constexpr int CARD_STRIDE = 8;
 enum CardSlot : int {
     CS_ID = 0,
     CS_PORT,
+    CS_SECRET,
+    CS_RAND,
     CS_SERVER,
     CS_CLIENT,
     CS_STOP,
@@ -88,8 +88,8 @@ const COLORREF CLR_GRAY_LINE = RGB(0xD5, 0xD9, 0xDE);
 // 布局常量（96-DPI 基准）
 // ---------------------------------------------------------------------------
 constexpr int L_PADX      = 16;
-constexpr int L_HDR_H     = 88;
-constexpr int L_CARD_H    = 112;
+constexpr int L_HDR_H     = 56;
+constexpr int L_CARD_H    = 140;
 constexpr int L_CARD_GAP  = 10;
 constexpr int L_LOG_H     = 132;
 constexpr int L_SCROLL_W  = 16;
@@ -100,8 +100,6 @@ constexpr int L_SCROLL_W  = 16;
 int g_dpi = 96;
 
 HWND g_hwnd        = nullptr;
-HWND g_edt_secret  = nullptr;
-HWND g_btn_rand    = nullptr;
 HWND g_btn_add     = nullptr;
 HWND g_btn_log     = nullptr;
 HWND g_edt_log     = nullptr;
@@ -127,6 +125,8 @@ struct Card {
     std::string traffic;
     HWND h_id     = nullptr;
     HWND h_port   = nullptr;
+    HWND h_secret = nullptr;
+    HWND h_rand   = nullptr;
     HWND h_server = nullptr;
     HWND h_client = nullptr;
     HWND h_stop   = nullptr;
@@ -297,7 +297,8 @@ HWND MakeButton(HWND parent, int id, const std::wstring& text) {
 // ---------------------------------------------------------------------------
 void DestroyCards() {
     for (auto& c : g_cards) {
-        HWND hs[6] = {c.h_id, c.h_port, c.h_server, c.h_client, c.h_stop, c.h_del};
+        HWND hs[8] = {c.h_id, c.h_port, c.h_secret, c.h_rand,
+                      c.h_server, c.h_client, c.h_stop, c.h_del};
         for (HWND h : hs) {
             if (h) DestroyWindow(h);
         }
@@ -321,6 +322,8 @@ void BuildCards() {
         int base_id = CARD_BASE + index * CARD_STRIDE;
         c.h_id     = MakeEdit(g_hwnd, base_id + CS_ID, r.id);
         c.h_port   = MakeEdit(g_hwnd, base_id + CS_PORT, p2ptun::ExtractPortOnly(r.port));
+        c.h_secret = MakeEdit(g_hwnd, base_id + CS_SECRET, r.secret);
+        c.h_rand   = MakeButton(g_hwnd, base_id + CS_RAND, L"随机");
         c.h_server = MakeButton(g_hwnd, base_id + CS_SERVER, L"服务端");
         c.h_client = MakeButton(g_hwnd, base_id + CS_CLIENT, L"客户端");
         c.h_stop   = MakeButton(g_hwnd, base_id + CS_STOP, L"停止");
@@ -364,23 +367,13 @@ void LayoutAll(int width, int height) {
 
     const int pad = Scale(L_PADX);
 
-    // ---- 顶部 ----
-    int row1_y = Scale(12);
-    int row1_h = Scale(30);
-    int label_w = Scale(56);
-    int rand_w  = Scale(88);
-    int secret_x = pad + label_w;
-    int secret_w = width - secret_x - pad - rand_w - Scale(8);
-    if (secret_w < Scale(80)) secret_w = Scale(80);
-    MoveCtrl(g_edt_secret, secret_x, row1_y, secret_w, row1_h, true);
-    MoveCtrl(g_btn_rand, secret_x + secret_w + Scale(8), row1_y, rand_w, row1_h, true);
-
-    int row2_y = Scale(50);
-    int row2_h = Scale(28);
-    MoveCtrl(g_btn_add, pad, row2_y, Scale(108), row2_h, true);
-    MoveCtrl(g_btn_log, width - pad - Scale(72), row2_y, Scale(72), row2_h, true);
+    // ---- 顶部：只有一行按钮 ----
+    int row_y = Scale(13);
+    int row_h = Scale(30);
+    MoveCtrl(g_btn_add, pad, row_y, Scale(112), row_h, true);
+    MoveCtrl(g_btn_log, width - pad - Scale(72), row_y, Scale(72), row_h, true);
     MoveCtrl(g_btn_clear, width - pad - Scale(72) - Scale(8) - Scale(56),
-             row2_y, Scale(56), row2_h, g_show_log);
+             row_y, Scale(56), row_h, g_show_log);
 
     // ---- 日志区 ----
     int log_h = g_show_log ? Scale(L_LOG_H) : 0;
@@ -431,19 +424,30 @@ void LayoutAll(int width, int height) {
 
         bool visible = (c.rc.bottom > card_top) && (c.rc.top < card_bottom);
 
-        int cy = y + Scale(14);
-        int id_label_w = Scale(22);
-        int id_w = Scale(150);
-        int port_label_w = Scale(34);
-        int port_w = Scale(88);
+        // 第一行：ID + 端口
+        int row1 = y + Scale(12);
+        int id_label_w = Scale(24);
+        int id_w = Scale(132);
+        int port_label_w = Scale(36);
+        int port_w = Scale(84);
 
         int x = pad + inner;
-        MoveCtrl(c.h_id, x + id_label_w, cy, id_w, field_h, visible);
-        int x2 = x + id_label_w + id_w + Scale(20);
-        MoveCtrl(c.h_port, x2 + port_label_w, cy, port_w, field_h, visible);
+        MoveCtrl(c.h_id, x + id_label_w, row1, id_w, field_h, visible);
+        int x2 = x + id_label_w + id_w + Scale(18);
+        MoveCtrl(c.h_port, x2 + port_label_w, row1, port_w, field_h, visible);
+
+        // 第二行：Secret + 随机
+        int row2 = y + Scale(46);
+        int sec_label_w = Scale(46);
+        int rand_w = Scale(52);
+        int sec_w = card_w - inner * 2 - sec_label_w - Scale(8) - rand_w;
+        if (sec_w < Scale(70)) sec_w = Scale(70);
+        MoveCtrl(c.h_secret, x + sec_label_w, row2, sec_w, field_h, visible);
+        MoveCtrl(c.h_rand, x + sec_label_w + sec_w + Scale(8), row2, rand_w, field_h, visible);
 
         MoveCtrl(c.h_del, pad + card_w - Scale(34), y + Scale(10), Scale(24), Scale(24), visible);
 
+        // 按钮行
         int by = y + card_h - Scale(12) - btn_h;
         int bw1 = Scale(92);
         int bw2 = Scale(92);
@@ -524,11 +528,6 @@ void PaintAll(HWND hwnd) {
     RECT hdr_line{0, Scale(L_HDR_H) - 1, w, Scale(L_HDR_H)};
     FillRect(mem, &hdr_line, g_brush_field);
 
-    // 「Secret」标签
-    RECT lbl{pad, Scale(12), pad + Scale(56), Scale(42)};
-    DrawTextIn(mem, L"Secret", lbl, CLR_TEXT_DIM, g_font,
-               DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-
     // 卡片（裁剪到卡片区，避免滚动时压到顶部/日志区）
     const int radius = Scale(10);
     int saved_dc = SaveDC(mem);
@@ -546,20 +545,26 @@ void PaintAll(HWND hwnd) {
         }
         FillRoundRect(mem, c.rc, radius, CLR_CARD, border, border_w);
 
-        int cy = c.rc.top + Scale(14);
+        int cy = c.rc.top + Scale(12);
         int x = c.rc.left + Scale(12);
 
         // ID / 端口 标签
-        RECT idl{x, cy, x + Scale(22), cy + Scale(28)};
+        RECT idl{x, cy, x + Scale(24), cy + Scale(28)};
         DrawTextIn(mem, L"ID", idl, CLR_TEXT_FAINT, g_font_small,
                    DT_SINGLELINE | DT_VCENTER | DT_LEFT);
-        int x2 = x + Scale(22) + Scale(150) + Scale(20);
-        RECT pl{x2, cy, x2 + Scale(34), cy + Scale(28)};
+        int x2 = x + Scale(24) + Scale(132) + Scale(18);
+        RECT pl{x2, cy, x2 + Scale(36), cy + Scale(28)};
         DrawTextIn(mem, L"端口", pl, CLR_TEXT_FAINT, g_font_small,
                    DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
+        // Secret 标签
+        int sec_y = c.rc.top + Scale(46);
+        RECT sl{x, sec_y, x + Scale(46), sec_y + Scale(28)};
+        DrawTextIn(mem, L"Secret", sl, CLR_TEXT_FAINT, g_font_small,
+                   DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+
         // 状态行
-        int sy = c.rc.top + Scale(52);
+        int sy = c.rc.top + Scale(80);
         COLORREF dot = CLR_TEXT_FAINT;
         if (c.running) dot = c.failed ? CLR_RED : CLR_GREEN;
 
@@ -670,6 +675,13 @@ void DrawOwnButton(const DRAWITEMSTRUCT* dis) {
             }
             break;
         }
+        case CS_RAND: {
+            text = L"随机";
+            bg = pressed ? RGB(0xE6, 0xE9, 0xED) : RGB(0xFF, 0xFF, 0xFF);
+            fg = CLR_TEXT_DIM;
+            border = CLR_GRAY_LINE;
+            break;
+        }
         case CS_DEL: {
             text = L"×";
             fill_background_transparent = true;
@@ -695,10 +707,9 @@ void DrawOwnButton(const DRAWITEMSTRUCT* dis) {
         }
     }
 
-    // 顶部次级按钮文字（随机 / 日志 / 清空）
+    // 顶部次级按钮文字（日志 / 清空）
     if (slot < 0) {
-        if (id == IDC_BTN_RAND_SEC) text = L"随机";
-        else if (id == IDC_BTN_LOG) text = g_show_log ? L"收起日志" : L"日志";
+        if (id == IDC_BTN_LOG) text = g_show_log ? L"收起日志" : L"日志";
         else if (id == IDC_BTN_CLEAR_LOG) text = L"清空";
     }
 
@@ -742,21 +753,6 @@ void DrawOwnButton(const DRAWITEMSTRUCT* dis) {
 // ---------------------------------------------------------------------------
 // 配置操作
 // ---------------------------------------------------------------------------
-std::string CurrentSecret() {
-    return GetCtrlTextU8(g_edt_secret);
-}
-
-void SaveSecretToConfig() {
-    if (!g_mgr) return;
-    std::string secret = CurrentSecret();
-    if (secret.empty()) return;
-    p2ptun::AppConfig cfg = g_mgr->GetConfig();
-    if (cfg.default_secret == secret) return;
-    std::string err;
-    g_mgr->UpdateGlobalSettings(cfg.p2ptun_path, secret, cfg.default_proto,
-                                cfg.default_bandwidth, cfg.minimize_to_tray, err);
-}
-
 void RefreshStatuses() {
     if (!g_mgr || !g_hwnd) return;
     std::vector<p2ptun::TunnelRowView> rows = g_mgr->GetRowViews();
@@ -807,6 +803,7 @@ bool ApplyCardToConfig(size_t index, p2ptun::TunnelRule& out_rule, std::string& 
     Card& c = g_cards[index];
     std::string new_id = GetCtrlTextU8(c.h_id);
     std::string port   = GetCtrlTextU8(c.h_port);
+    std::string secret = GetCtrlTextU8(c.h_secret);
 
     if (new_id.empty()) {
         out_err = "隧道 ID 不能为空";
@@ -824,11 +821,16 @@ bool ApplyCardToConfig(size_t index, p2ptun::TunnelRule& out_rule, std::string& 
         if (r.id == c.id) { rule = r; found = true; break; }
     }
     if (!found) rule = p2ptun::TunnelRule{};
+    if (secret.empty()) {
+        secret = p2ptun::GenerateRandomSecret();
+        SetCtrlTextU8(c.h_secret, secret);
+    }
 
     std::string old_id = rule.id.empty() ? c.id : rule.id;
-    rule.id   = new_id;
-    rule.name = new_id;
-    rule.port = port;
+    rule.id     = new_id;
+    rule.name   = new_id;
+    rule.port   = port;
+    rule.secret = secret;
 
     std::string out_id;
     if (!g_mgr->AddOrUpdateRule(rule, false, out_id, out_err)) {
@@ -842,12 +844,12 @@ bool ApplyCardToConfig(size_t index, p2ptun::TunnelRule& out_rule, std::string& 
     out_rule = rule;
     out_rule.id = out_id;
     out_rule.name = out_id;
+    out_rule.secret = secret;
     return true;
 }
 
 void StartCard(size_t index, const char* mode) {
     if (!g_mgr || index >= g_cards.size()) return;
-    SaveSecretToConfig();
 
     p2ptun::TunnelRule rule;
     std::string err;
@@ -889,10 +891,11 @@ void DeleteCard(size_t index) {
 void AddCard() {
     if (!g_mgr) return;
     p2ptun::TunnelRule rule;
-    rule.id   = p2ptun::GenerateRandomTunnelId();
-    rule.name = rule.id;
-    rule.port = "3389";
-    rule.mode = "expose";
+    rule.id     = p2ptun::GenerateRandomTunnelId();
+    rule.name   = rule.id;
+    rule.port   = "3389";
+    rule.secret = p2ptun::GenerateRandomSecret();
+    rule.mode   = "expose";
 
     std::string out_id, err;
     if (!g_mgr->AddOrUpdateRule(rule, false, out_id, err)) {
@@ -951,6 +954,12 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
         if (notify_code != BN_CLICKED) return;
 
         switch (slot) {
+            case CS_RAND: {
+                Card& c = g_cards[static_cast<size_t>(index)];
+                SetCtrlTextU8(c.h_secret, p2ptun::GenerateRandomSecret());
+                SendMessageW(c.h_secret, EM_SETSEL, 0, -1);
+                return;
+            }
             case CS_SERVER: StartCard(static_cast<size_t>(index), "expose");  break;
             case CS_CLIENT: StartCard(static_cast<size_t>(index), "connect"); break;
             case CS_STOP:   StopCard(static_cast<size_t>(index));             break;
@@ -964,12 +973,6 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
         case IDC_BTN_ADD:
             if (notify_code == BN_CLICKED) AddCard();
             break;
-        case IDC_BTN_RAND_SEC:
-            if (notify_code == BN_CLICKED) {
-                SetCtrlTextU8(g_edt_secret, p2ptun::GenerateRandomSecret());
-                SaveSecretToConfig();
-            }
-            break;
         case IDC_BTN_LOG:
             if (notify_code == BN_CLICKED) ToggleLog();
             break;
@@ -978,9 +981,6 @@ void HandleCommand(HWND hwnd, int id, int notify_code) {
                 g_mgr->Logs().Clear();
                 if (g_edt_log) SetWindowTextW(g_edt_log, L"");
             }
-            break;
-        case IDC_EDT_SECRET:
-            if (notify_code == EN_KILLFOCUS) SaveSecretToConfig();
             break;
         default:
             break;
@@ -997,8 +997,6 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             UpdateDpiFromWindow(hwnd);
             CreateUiResources();
 
-            g_edt_secret = MakeEdit(hwnd, IDC_EDT_SECRET, "");
-            g_btn_rand   = MakeButton(hwnd, IDC_BTN_RAND_SEC, L"随机");
             g_btn_add    = MakeButton(hwnd, IDC_BTN_ADD, L"+ 新增隧道");
             g_btn_log    = MakeButton(hwnd, IDC_BTN_LOG, L"日志");
             g_edt_log    = CreateWindowExW(
@@ -1012,9 +1010,6 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             }
             g_btn_clear = MakeButton(hwnd, IDC_BTN_CLEAR_LOG, L"清空");
 
-            if (g_mgr) {
-                SetCtrlTextU8(g_edt_secret, g_mgr->GetConfig().default_secret);
-            }
             BuildCards();
             return 0;
         }
@@ -1025,12 +1020,13 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             CreateUiResources();
             // 重新给所有控件换字体
             for (auto& c : g_cards) {
-                HWND hs[6] = {c.h_id, c.h_port, c.h_server, c.h_client, c.h_stop, c.h_del};
+                HWND hs[8] = {c.h_id, c.h_port, c.h_secret, c.h_rand,
+                              c.h_server, c.h_client, c.h_stop, c.h_del};
                 for (HWND h : hs) {
                     if (h) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
                 }
             }
-            HWND tops[4] = {g_edt_secret, g_btn_rand, g_btn_add, g_btn_log};
+            HWND tops[3] = {g_btn_add, g_btn_log, g_btn_clear};
             for (HWND h : tops) {
                 if (h) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
             }
@@ -1156,7 +1152,6 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                     std::string err;
                     ApplyCardToConfig(i, tmp, err);
                 }
-                SaveSecretToConfig();
                 g_mgr->StopAll(false);
             }
             DestroyWindow(hwnd);
