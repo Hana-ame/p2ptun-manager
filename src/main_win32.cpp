@@ -322,7 +322,8 @@ void BuildCards() {
         int base_id = CARD_BASE + index * CARD_STRIDE;
         c.h_id     = MakeEdit(g_hwnd, base_id + CS_ID, r.id);
         c.h_port   = MakeEdit(g_hwnd, base_id + CS_PORT, p2ptun::ExtractPortOnly(r.port));
-        c.h_secret = MakeEdit(g_hwnd, base_id + CS_SECRET, r.secret);
+        c.h_secret = MakeEdit(g_hwnd, base_id + CS_SECRET,
+                              r.secret.empty() ? cfg.default_secret : r.secret);
         c.h_rand   = MakeButton(g_hwnd, base_id + CS_RAND, L"随机");
         c.h_server = MakeButton(g_hwnd, base_id + CS_SERVER, L"服务端");
         c.h_client = MakeButton(g_hwnd, base_id + CS_CLIENT, L"客户端");
